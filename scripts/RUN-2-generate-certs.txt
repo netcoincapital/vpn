@@ -1,0 +1,8 @@
+In the same Administrator PowerShell window, run:
+
+cd "e:\config vpn\scripts"
+.\2-generate-certificates.ps1
+
+Or run with full path (from any folder):
+
+& "e:\config vpn\scripts\2-generate-certificates.ps1"
