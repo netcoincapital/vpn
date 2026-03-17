@@ -4,6 +4,7 @@ import uuid
 import base64
 import json
 import re
+from urllib.parse import quote
 from datetime import datetime, timedelta
 
 from flask import Flask, render_template, request, redirect, url_for, flash
@@ -42,6 +43,7 @@ CLIENT_TLS_ENABLED = os.environ.get("VPN_CLIENT_TLS", "0").lower() in ("1", "tru
 CLIENT_HOST = os.environ.get("VPN_CLIENT_HOST", "")
 CLIENT_PATH = os.environ.get("VPN_CLIENT_PATH", "")
 CLIENT_HEADER_TYPE = os.environ.get("VPN_CLIENT_HEADER_TYPE", "")
+PREFERRED_PROFILE_PROTOCOL = os.environ.get("VPN_PROFILE_PROTOCOL", "vless").lower()
 
 
 def load_activity_stats():
@@ -389,22 +391,33 @@ def read_v2ray_config():
         return json.load(f)
 
 
-def get_vmess_inbound(config):
+def get_inbound_by_protocol(config, protocol_name):
     for inbound in config.get("inbounds", []):
-        if inbound.get("protocol") == "vmess":
+        if inbound.get("protocol") == protocol_name:
             return inbound
     return None
 
 
-def get_vmess_port(config):
-    inbound = get_vmess_inbound(config)
+def get_vmess_inbound(config):
+    return get_inbound_by_protocol(config, "vmess")
+
+
+def get_vless_inbound(config):
+    return get_inbound_by_protocol(config, "vless")
+
+
+def get_inbound_port(config, protocol_name, fallback_port="443"):
+    inbound = get_inbound_by_protocol(config, protocol_name)
     if inbound and inbound.get("port"):
         return str(inbound.get("port"))
-    return "443"
+    return fallback_port
 
 
-def get_vmess_stream_profile(config):
-    inbound = get_vmess_inbound(config)
+def get_vmess_port(config):
+    return get_inbound_port(config, "vmess", "443")
+
+
+def get_stream_profile(inbound):
     if not inbound:
         return {
             "network": "tcp",
@@ -451,6 +464,14 @@ def get_vmess_stream_profile(config):
     }
 
 
+def get_vmess_stream_profile(config):
+    return get_stream_profile(get_vmess_inbound(config))
+
+
+def get_vless_stream_profile(config):
+    return get_stream_profile(get_vless_inbound(config))
+
+
 def write_v2ray_config(config):
     with open(V2RAY_CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
@@ -458,77 +479,129 @@ def write_v2ray_config(config):
 
 def add_user_to_v2ray_config(username, user_uuid):
     config = read_v2ray_config()
-    inbound = get_vmess_inbound(config)
-    if not inbound:
+    changed = False
+
+    vmess_inbound = get_vmess_inbound(config)
+    if vmess_inbound:
+        settings = vmess_inbound.setdefault("settings", {})
+        clients = settings.setdefault("clients", [])
+        clients[:] = [
+            c
+            for c in clients
+            if c.get("id") != user_uuid and c.get("email", "").lower() != username.lower()
+        ]
+        clients.append(
+            {
+                "id": user_uuid,
+                "alterId": 0,
+                "email": username,
+            }
+        )
+        changed = True
+
+    vless_inbound = get_vless_inbound(config)
+    if vless_inbound:
+        settings = vless_inbound.setdefault("settings", {})
+        clients = settings.setdefault("clients", [])
+        clients[:] = [
+            c
+            for c in clients
+            if c.get("id") != user_uuid and c.get("email", "").lower() != username.lower()
+        ]
+        clients.append(
+            {
+                "id": user_uuid,
+                "email": username,
+                "decryption": "none",
+            }
+        )
+        changed = True
+
+    if not changed:
         return
 
-    settings = inbound.setdefault("settings", {})
-    clients = settings.setdefault("clients", [])
-
-    # Remove existing client by id or email, then add the latest one.
-    clients[:] = [
-        c
-        for c in clients
-        if c.get("id") != user_uuid and c.get("email", "").lower() != username.lower()
-    ]
-    clients.append(
-        {
-            "id": user_uuid,
-            "alterId": 0,
-            "email": username,
-        }
-    )
     write_v2ray_config(config)
     # Reload v2ray
     # subprocess.run(["systemctl", "reload", "v2ray"], check=False)
 
 
 def sync_v2ray_clients_with_users():
-    """Rebuild VMess clients list from users.txt so server config is always authoritative."""
+    """Rebuild VMess/VLESS clients list from users.txt so server config is authoritative."""
     config = read_v2ray_config()
-    inbound = get_vmess_inbound(config)
-    if not inbound:
+    vmess_inbound = get_vmess_inbound(config)
+    vless_inbound = get_vless_inbound(config)
+    if not vmess_inbound and not vless_inbound:
         return False
 
-    desired_clients = []
+    desired_vmess_clients = []
+    desired_vless_clients = []
     for user in read_users():
         if not user.get("uuid"):
             continue
-        desired_clients.append(
+        desired_vmess_clients.append(
             {
                 "id": user["uuid"],
                 "alterId": 0,
                 "email": user["username"],
             }
         )
+        desired_vless_clients.append(
+            {
+                "id": user["uuid"],
+                "email": user["username"],
+                "decryption": "none",
+            }
+        )
 
-    settings = inbound.setdefault("settings", {})
-    current_clients = settings.setdefault("clients", [])
-    if current_clients == desired_clients:
+    changed = False
+
+    if vmess_inbound:
+        settings = vmess_inbound.setdefault("settings", {})
+        current_clients = settings.setdefault("clients", [])
+        if current_clients != desired_vmess_clients:
+            settings["clients"] = desired_vmess_clients
+            changed = True
+
+    if vless_inbound:
+        settings = vless_inbound.setdefault("settings", {})
+        current_clients = settings.setdefault("clients", [])
+        if current_clients != desired_vless_clients:
+            settings["clients"] = desired_vless_clients
+            changed = True
+
+    if not changed:
         return False
 
-    settings["clients"] = desired_clients
     write_v2ray_config(config)
     return True
 
 def remove_user_from_v2ray_config(user_uuid):
     config = read_v2ray_config()
-    inbound = get_vmess_inbound(config)
-    if not inbound:
+    changed = False
+    for inbound in (get_vmess_inbound(config), get_vless_inbound(config)):
+        if not inbound:
+            continue
+        clients = inbound.setdefault("settings", {}).setdefault("clients", [])
+        before = len(clients)
+        clients[:] = [c for c in clients if c.get("id") != user_uuid]
+        if len(clients) != before:
+            changed = True
+
+    if not changed:
         return
-    clients = inbound.setdefault("settings", {}).setdefault("clients", [])
-    clients[:] = [c for c in clients if c.get("id") != user_uuid]
+
     write_v2ray_config(config)
     # subprocess.run(["systemctl", "reload", "v2ray"], check=False)
 
 def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
-    """Create or overwrite VMess client profile and sync V2Ray config."""
+    """Create or overwrite VMess/VLESS client profile and sync V2Ray config."""
 
     profile_dir = os.path.join(CLIENTS_DIR, username)
     profile_path = os.path.join(profile_dir, "client.txt")
 
     config = read_v2ray_config()
     vmess_port = get_vmess_port(config)
+    vless_port = get_inbound_port(config, "vless", vmess_port)
     stream_profile = get_vmess_stream_profile(config)
 
     profile_display_name = f"{PROFILE_NAME_PREFIX}{username}{PROFILE_NAME_SUFFIX}".strip()
@@ -540,7 +613,6 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
     header_type = CLIENT_HEADER_TYPE.strip() if CLIENT_HEADER_TYPE.strip() else stream_profile["header_type"]
     header_type = header_type if header_type in ("none", "http") else "none"
 
-    # Create VMess config
     vmess_config = {
         "v": "2",
         "ps": profile_display_name,
@@ -555,19 +627,39 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
         "tls": tls_value,
     }
 
-    # Encode to base64
     config_json = json.dumps(vmess_config, separators=(',', ':'))
     vmess_link = "vmess://" + base64.b64encode(config_json.encode()).decode()
 
-    # Create profile directory and file
+    vless_query_items = [
+        ("encryption", "none"),
+        ("security", tls_value if tls_value else "none"),
+        ("type", network),
+    ]
+    if host_value:
+        vless_query_items.append(("host", host_value))
+    if header_type and header_type != "none":
+        vless_query_items.append(("headerType", header_type))
+    if path_value:
+        vless_query_items.append(("path", path_value))
+
+    vless_query = "&".join([f"{k}={quote(str(v), safe='')}" for k, v in vless_query_items])
+    vless_link = (
+        f"vless://{user_uuid}@{server_ip}:{vless_port}?{vless_query}"
+        f"#{quote(profile_display_name, safe='')}"
+    )
+
+    links = [vmess_link, vless_link]
+    if PREFERRED_PROFILE_PROTOCOL == "vless":
+        links = [vless_link, vmess_link]
+
     os.makedirs(profile_dir, exist_ok=True)
     with open(profile_path, "w", encoding="utf-8") as f:
-        f.write(vmess_link)
+        f.write("\n".join(links))
 
     # Add user to V2Ray config
     add_user_to_v2ray_config(username, user_uuid)
 
-    print(f"Generated VMess link for {username}: {vmess_link}")
+    print(f"Generated profiles for {username}: {links[0]}")
 
 
 def sync_all_client_profiles(default_server_ip="81.214.86.32"):
