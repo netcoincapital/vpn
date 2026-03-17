@@ -13,7 +13,7 @@ PROJECT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 USERS_FILE = os.path.join(PROJECT_DIR, "server", "users.txt")
 V2RAY_CONFIG_FILE = os.path.join(PROJECT_DIR, "config", "v2ray-config.json")
 # لاگ دسترسی V2Ray برای تشخیص کاربران آنلاین
-V2RAY_ACCESS_LOG = os.path.join(PROJECT_DIR, "config", "logs", "access.log")
+V2RAY_ACCESS_LOG = os.path.join(PROJECT_DIR, "logs", "access.log")
 # پوشه خروجی پروفایل کلاینت‌ها
 CLIENTS_DIR = os.path.join(PROJECT_DIR, "client")
 
@@ -150,6 +150,14 @@ def upsert_user(username, uuid_val, days, limit_gb=None):
     write_users(users)
 
 
+def get_user_by_username(username):
+    username = username.strip().lower()
+    for u in read_users():
+        if u["username"].strip().lower() == username:
+            return u
+    return None
+
+
 def deactivate_user(username):
     username = username.strip()
     users = read_users()
@@ -217,49 +225,77 @@ def read_v2ray_config():
     with open(V2RAY_CONFIG_FILE, "r") as f:
         return json.load(f)
 
+
+def get_vmess_inbound(config):
+    for inbound in config.get("inbounds", []):
+        if inbound.get("protocol") == "vmess":
+            return inbound
+    return None
+
+
+def get_vmess_port(config):
+    inbound = get_vmess_inbound(config)
+    if inbound and inbound.get("port"):
+        return str(inbound.get("port"))
+    return "443"
+
+
 def write_v2ray_config(config):
     with open(V2RAY_CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
 
+
 def add_user_to_v2ray_config(username, user_uuid):
     config = read_v2ray_config()
-    clients = config["inbounds"][0]["settings"]["clients"]
-    # Remove existing user if present
-    clients[:] = [c for c in clients if c.get("id") != user_uuid]
-    # Add new user
-    clients.append({
-        "id": user_uuid,
-        "alterId": 0,
-        "email": username
-    })
+    inbound = get_vmess_inbound(config)
+    if not inbound:
+        return
+
+    settings = inbound.setdefault("settings", {})
+    clients = settings.setdefault("clients", [])
+
+    # Remove existing client by id or email, then add the latest one.
+    clients[:] = [
+        c
+        for c in clients
+        if c.get("id") != user_uuid and c.get("email", "").lower() != username.lower()
+    ]
+    clients.append(
+        {
+            "id": user_uuid,
+            "alterId": 0,
+            "email": username,
+        }
+    )
     write_v2ray_config(config)
     # Reload v2ray
     # subprocess.run(["systemctl", "reload", "v2ray"], check=False)
 
 def remove_user_from_v2ray_config(user_uuid):
     config = read_v2ray_config()
-    clients = config["inbounds"][0]["settings"]["clients"]
+    inbound = get_vmess_inbound(config)
+    if not inbound:
+        return
+    clients = inbound.setdefault("settings", {}).setdefault("clients", [])
     clients[:] = [c for c in clients if c.get("id") != user_uuid]
     write_v2ray_config(config)
     # subprocess.run(["systemctl", "reload", "v2ray"], check=False)
 
-def ensure_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
-    """Create a client profile if it does not already exist.
-
-    Creates a VMess link for V2Ray using the provided UUID.
-    """
+def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
+    """Create or overwrite VMess client profile and sync V2Ray config."""
 
     profile_dir = os.path.join(CLIENTS_DIR, username)
     profile_path = os.path.join(profile_dir, "client.txt")
-    if os.path.exists(profile_path):
-        return
+
+    config = read_v2ray_config()
+    vmess_port = get_vmess_port(config)
 
     # Create VMess config
     vmess_config = {
         "v": "2",
         "ps": username,
         "add": server_ip,
-        "port": "443",
+        "port": vmess_port,
         "id": user_uuid,
         "aid": "0",
         "net": "tcp",
@@ -339,9 +375,10 @@ def create_app():
                     limit_gb = None
             except ValueError:
                 limit_gb = None
-        user_uuid = str(uuid.uuid4())
+        existing_user = get_user_by_username(username)
+        user_uuid = existing_user.get("uuid") if existing_user and existing_user.get("uuid") else str(uuid.uuid4())
         upsert_user(username, user_uuid, days, limit_gb)
-        ensure_client_profile(username, server_ip, user_uuid)
+        write_client_profile(username, server_ip, user_uuid)
         flash(f"کاربر {username} با انقضای {days} روزه ذخیره شد.", "success")
         return redirect(url_for("index"))
 
