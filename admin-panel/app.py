@@ -3,6 +3,7 @@ import subprocess
 import uuid
 import base64
 import json
+import re
 from datetime import datetime, timedelta
 
 from flask import Flask, render_template, request, redirect, url_for, flash
@@ -24,6 +25,12 @@ AUTO_RESTART_V2RAY = os.environ.get("VPN_AUTO_RESTART_V2RAY", "1").lower() in (
     "true",
     "yes",
 )
+ENFORCE_SINGLE_DEVICE = os.environ.get("VPN_ENFORCE_SINGLE_DEVICE", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+SINGLE_DEVICE_WINDOW_MINUTES = int(os.environ.get("VPN_SINGLE_DEVICE_WINDOW_MIN", "5"))
 
 # تنظیمات ساده برای احراز هویت پنل مدیریت
 ADMIN_USERNAME = os.environ.get("VPN_ADMIN_USER", "admin")
@@ -170,6 +177,74 @@ def get_online_usernames():
     except OSError:
         pass
     return online
+
+
+def parse_recent_accepted_ips_by_user(window_minutes=5):
+    """Return mapping of username -> set(source_ip) for recent accepted sessions."""
+    user_ips = {}
+    if not os.path.exists(V2RAY_ACCESS_LOG):
+        return user_ips
+
+    cutoff = datetime.now() - timedelta(minutes=window_minutes)
+    pattern = re.compile(
+        r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+([0-9.]+):\d+\s+accepted.*email:\s*(\S+)"
+    )
+
+    try:
+        with open(V2RAY_ACCESS_LOG, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                m = pattern.search(line)
+                if not m:
+                    continue
+
+                try:
+                    log_time = datetime.strptime(m.group(1), "%Y/%m/%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if log_time < cutoff:
+                    continue
+
+                source_ip = m.group(2).strip()
+                username = m.group(3).strip().lower()
+                if not username or not source_ip:
+                    continue
+                user_ips.setdefault(username, set()).add(source_ip)
+    except OSError:
+        pass
+
+    return user_ips
+
+
+def enforce_single_device_policy():
+    """Disable users that are simultaneously active from more than one source IP."""
+    if not ENFORCE_SINGLE_DEVICE:
+        return []
+
+    violations = []
+    ip_map = parse_recent_accepted_ips_by_user(SINGLE_DEVICE_WINDOW_MINUTES)
+    if not ip_map:
+        return violations
+
+    users = read_users()
+    users_by_name = {u["username"].lower(): u for u in users}
+
+    for username, ips in ip_map.items():
+        if len(ips) <= 1:
+            continue
+        target = users_by_name.get(username)
+        if not target:
+            continue
+        # Skip already disabled users.
+        if target.get("raw", "").lstrip().startswith("#"):
+            continue
+
+        deactivate_user(target["username"])
+        violations.append({"username": target["username"], "ips": sorted(list(ips))})
+
+    if violations:
+        restart_v2ray_process()
+
+    return violations
 
 
 def write_users(users):
@@ -472,6 +547,12 @@ def create_app():
 
     @app.route("/")
     def index():
+        violations = enforce_single_device_policy()
+        for v in violations:
+            flash(
+                f"کاربر {v['username']} به دلیل اتصال همزمان از چند دستگاه غیرفعال شد: {', '.join(v['ips'])}",
+                "warning",
+            )
         users = read_users()
         online_users = get_online_usernames()
         for u in users:
@@ -480,6 +561,12 @@ def create_app():
 
     @app.get("/stats")
     def stats_page():
+        violations = enforce_single_device_policy()
+        for v in violations:
+            flash(
+                f"کاربر {v['username']} به دلیل اتصال همزمان از چند دستگاه غیرفعال شد.",
+                "warning",
+            )
         summary = get_user_summary_counts()
         return render_template("stats.html", summary=summary)
 
