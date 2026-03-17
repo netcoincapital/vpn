@@ -433,6 +433,35 @@ def add_user_to_v2ray_config(username, user_uuid):
     # Reload v2ray
     # subprocess.run(["systemctl", "reload", "v2ray"], check=False)
 
+
+def sync_v2ray_clients_with_users():
+    """Rebuild VMess clients list from users.txt so server config is always authoritative."""
+    config = read_v2ray_config()
+    inbound = get_vmess_inbound(config)
+    if not inbound:
+        return False
+
+    desired_clients = []
+    for user in read_users():
+        if not user.get("uuid"):
+            continue
+        desired_clients.append(
+            {
+                "id": user["uuid"],
+                "alterId": 0,
+                "email": user["username"],
+            }
+        )
+
+    settings = inbound.setdefault("settings", {})
+    current_clients = settings.setdefault("clients", [])
+    if current_clients == desired_clients:
+        return False
+
+    settings["clients"] = desired_clients
+    write_v2ray_config(config)
+    return True
+
 def remove_user_from_v2ray_config(user_uuid):
     config = read_v2ray_config()
     inbound = get_vmess_inbound(config)
@@ -488,6 +517,23 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
     print(f"Generated VMess link for {username}: {vmess_link}")
 
 
+def sync_all_client_profiles(default_server_ip="81.214.86.32"):
+    """Regenerate all downloadable client profiles from current config/users state."""
+    for user in read_users():
+        write_client_profile(
+            user["username"],
+            default_server_ip,
+            user["uuid"],
+        )
+
+
+def reconcile_runtime_state(default_server_ip="81.214.86.32"):
+    """Keep server config and client files synchronized with users.txt."""
+    config_changed = sync_v2ray_clients_with_users()
+    sync_all_client_profiles(default_server_ip)
+    return config_changed
+
+
 def restart_v2ray_process():
     """Restart local V2Ray process to apply config changes immediately."""
     if not AUTO_RESTART_V2RAY:
@@ -539,6 +585,8 @@ def restart_v2ray_process():
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("VPN_ADMIN_SECRET", "change-this-secret")
+
+    reconcile_runtime_state()
 
     @app.before_request
     def basic_auth():
@@ -612,6 +660,7 @@ def create_app():
         user_uuid = existing_user.get("uuid") if existing_user and existing_user.get("uuid") else str(uuid.uuid4())
         upsert_user(username, user_uuid, days, limit_gb)
         write_client_profile(username, server_ip, user_uuid)
+        sync_v2ray_clients_with_users()
         restarted, msg = restart_v2ray_process()
         if restarted:
             flash("سرویس V2Ray برای اعمال تغییرات کاربر ری‌استارت شد.", "success")
@@ -623,6 +672,7 @@ def create_app():
     @app.post("/deactivate/<username>")
     def route_deactivate(username):
         deactivate_user(username)
+        sync_v2ray_clients_with_users()
         restart_v2ray_process()
         flash(f"کاربر {username} غیر فعال شد.", "warning")
         return redirect(url_for("index"))
@@ -632,6 +682,7 @@ def create_app():
         removed = remove_user(username)
         if removed:
             increment_activity_stat("deleted_users", 1)
+        sync_v2ray_clients_with_users()
         restart_v2ray_process()
         flash(f"کاربر {username} حذف شد.", "danger")
         return redirect(url_for("index"))
@@ -645,6 +696,7 @@ def create_app():
                 removed_count += 1
         if removed_count:
             increment_activity_stat("deleted_users", removed_count)
+        sync_v2ray_clients_with_users()
         if usernames:
             restart_v2ray_process()
         flash(f"{len(usernames)} کاربر حذف شد.", "danger")
@@ -661,11 +713,17 @@ def create_app():
             days = 30
         if extend_user(username, days):
             increment_activity_stat("extended_users", 1)
+        sync_all_client_profiles()
         flash(f"انقضای کاربر {username} به اندازه {days} روز تمدید شد.", "success")
         return redirect(url_for("index"))
 
     @app.get("/download/<username>")
     def download_profile(username):
+        user = get_user_by_username(username)
+        if user:
+            sync_v2ray_clients_with_users()
+            write_client_profile(username, "81.214.86.32", user["uuid"])
+
         profile_path = os.path.join(CLIENTS_DIR, username, "client.txt")
         if not os.path.exists(profile_path):
             flash("برای این کاربر هنوز پروفایل کلاینت ساخته نشده است.", "danger")
