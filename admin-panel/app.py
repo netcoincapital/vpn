@@ -35,6 +35,12 @@ SINGLE_DEVICE_WINDOW_MINUTES = int(os.environ.get("VPN_SINGLE_DEVICE_WINDOW_MIN"
 # تنظیمات ساده برای احراز هویت پنل مدیریت
 ADMIN_USERNAME = os.environ.get("VPN_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("VPN_ADMIN_PASS", "change-me")
+PROFILE_NAME_PREFIX = os.environ.get("VPN_PROFILE_NAME_PREFIX", "🇫🇮")
+PROFILE_NAME_SUFFIX = os.environ.get("VPN_PROFILE_NAME_SUFFIX", "(🟢)")
+CLIENT_NETWORK = os.environ.get("VPN_CLIENT_NETWORK", "tcp")
+CLIENT_TLS_ENABLED = os.environ.get("VPN_CLIENT_TLS", "0").lower() in ("1", "true", "yes")
+CLIENT_HOST = os.environ.get("VPN_CLIENT_HOST", "")
+CLIENT_PATH = os.environ.get("VPN_CLIENT_PATH", "")
 
 
 def load_activity_stats():
@@ -353,6 +359,7 @@ def extend_user(username, days):
     users = read_users()
     today = datetime.now().date()
     extended = False
+
     for u in users:
         if u["username"].lower() == username.lower():
             try:
@@ -363,13 +370,15 @@ def extend_user(username, days):
                 )
             except ValueError:
                 base = today
+
             new_expiry = base + timedelta(days=days)
             u["expiry_str"] = new_expiry.strftime("%Y-%m-%d")
             u["status"] = "active"
             u["commented"] = False
-                extended = True
+            extended = True
+
     write_users(users)
-            return extended
+    return extended
 
 
 def read_v2ray_config():
@@ -443,19 +452,25 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
     config = read_v2ray_config()
     vmess_port = get_vmess_port(config)
 
+    profile_display_name = f"{PROFILE_NAME_PREFIX}{username}{PROFILE_NAME_SUFFIX}".strip()
+    network = CLIENT_NETWORK if CLIENT_NETWORK in ("tcp", "ws") else "tcp"
+    tls_value = "tls" if CLIENT_TLS_ENABLED else ""
+    host_value = CLIENT_HOST.strip()
+    path_value = CLIENT_PATH.strip()
+
     # Create VMess config
     vmess_config = {
         "v": "2",
-        "ps": username,
+        "ps": profile_display_name,
         "add": server_ip,
         "port": vmess_port,
         "id": user_uuid,
         "aid": "0",
-        "net": "tcp",
+        "net": network,
         "type": "none",
-        "host": "",
-        "path": "",
-        "tls": ""
+        "host": host_value,
+        "path": path_value,
+        "tls": tls_value,
     }
 
     # Encode to base64
