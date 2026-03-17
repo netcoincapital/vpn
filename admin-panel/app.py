@@ -1,4 +1,5 @@
 import os
+import subprocess
 import uuid
 import base64
 import json
@@ -12,14 +13,85 @@ PROJECT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 # مسیرهای نسبی - روی ویندوز و لینوکس کار می‌کنند
 USERS_FILE = os.path.join(PROJECT_DIR, "server", "users.txt")
 V2RAY_CONFIG_FILE = os.path.join(PROJECT_DIR, "config", "v2ray-config.json")
+ACTIVITY_STATS_FILE = os.path.join(PROJECT_DIR, "server", "activity_stats.json")
 # لاگ دسترسی V2Ray برای تشخیص کاربران آنلاین
 V2RAY_ACCESS_LOG = os.path.join(PROJECT_DIR, "logs", "access.log")
 # پوشه خروجی پروفایل کلاینت‌ها
 CLIENTS_DIR = os.path.join(PROJECT_DIR, "client")
+V2RAY_BIN = os.environ.get("V2RAY_BIN", os.path.join(PROJECT_DIR, "v2ray.exe"))
+AUTO_RESTART_V2RAY = os.environ.get("VPN_AUTO_RESTART_V2RAY", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # تنظیمات ساده برای احراز هویت پنل مدیریت
 ADMIN_USERNAME = os.environ.get("VPN_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("VPN_ADMIN_PASS", "change-me")
+
+
+def load_activity_stats():
+    defaults = {"deleted_users": 0, "extended_users": 0}
+    if not os.path.exists(ACTIVITY_STATS_FILE):
+        return defaults
+    try:
+        with open(ACTIVITY_STATS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "deleted_users": int(data.get("deleted_users", 0)),
+            "extended_users": int(data.get("extended_users", 0)),
+        }
+    except (OSError, ValueError, TypeError):
+        return defaults
+
+
+def save_activity_stats(stats):
+    os.makedirs(os.path.dirname(ACTIVITY_STATS_FILE), exist_ok=True)
+    with open(ACTIVITY_STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+
+def increment_activity_stat(key, amount=1):
+    stats = load_activity_stats()
+    stats[key] = max(0, int(stats.get(key, 0)) + int(amount))
+    save_activity_stats(stats)
+
+
+def get_user_summary_counts():
+    total_users = 0
+    active_users = 0
+    inactive_users = 0
+
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+
+                # Header comments are ignored.
+                if raw.startswith("# لیست کاربران") or raw.startswith("# یوزرنیم"):
+                    continue
+
+                if raw.startswith("#"):
+                    payload = raw[1:].strip()
+                    if payload and ":" in payload:
+                        inactive_users += 1
+                        total_users += 1
+                    continue
+
+                if ":" in raw:
+                    active_users += 1
+                    total_users += 1
+
+    stats = load_activity_stats()
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "inactive_users": inactive_users,
+        "deleted_users": stats.get("deleted_users", 0),
+        "extended_users": stats.get("extended_users", 0),
+    }
 
 
 def read_users():
@@ -172,8 +244,10 @@ def remove_user(username):
     username = username.strip()
     users = read_users()
     new_users = []
+    removed = False
     for u in users:
         if u["username"].lower() == username.lower():
+            removed = True
             remove_user_from_v2ray_config(u.get("uuid", ""))
             # remove client profile folder
             profile_dir = os.path.join(CLIENTS_DIR, username)
@@ -196,12 +270,14 @@ def remove_user(username):
             continue
         new_users.append(u)
     write_users(new_users)
+    return removed
 
 
 def extend_user(username, days):
     username = username.strip()
     users = read_users()
     today = datetime.now().date()
+    extended = False
     for u in users:
         if u["username"].lower() == username.lower():
             try:
@@ -216,7 +292,9 @@ def extend_user(username, days):
             u["expiry_str"] = new_expiry.strftime("%Y-%m-%d")
             u["status"] = "active"
             u["commented"] = False
+                extended = True
     write_users(users)
+            return extended
 
 
 def read_v2ray_config():
@@ -320,6 +398,54 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
     print(f"Generated VMess link for {username}: {vmess_link}")
 
 
+def restart_v2ray_process():
+    """Restart local V2Ray process to apply config changes immediately."""
+    if not AUTO_RESTART_V2RAY:
+        return False, "auto restart disabled"
+
+    if not os.path.exists(V2RAY_CONFIG_FILE):
+        return False, "config file not found"
+
+    try:
+        if os.name == "nt":
+            # Stop all existing v2ray instances.
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "v2ray.exe"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            if not os.path.exists(V2RAY_BIN):
+                return False, f"v2ray binary not found: {V2RAY_BIN}"
+
+            creationflags = 0x00000008 | 0x00000200 | 0x08000000
+            subprocess.Popen(
+                [V2RAY_BIN, "run", "-config", V2RAY_CONFIG_FILE],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            return True, "v2ray restarted"
+
+        # Linux/macOS fallback
+        subprocess.run(
+            ["pkill", "-f", "v2ray"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.Popen(
+            ["v2ray", "run", "-config", V2RAY_CONFIG_FILE],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True, "v2ray restarted"
+    except OSError as exc:
+        return False, str(exc)
+
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("VPN_ADMIN_SECRET", "change-this-secret")
@@ -352,6 +478,11 @@ def create_app():
             u["is_online"] = u["username"].lower() in online_users
         return render_template("index.html", users=users)
 
+    @app.get("/stats")
+    def stats_page():
+        summary = get_user_summary_counts()
+        return render_template("stats.html", summary=summary)
+
     @app.post("/add")
     def add():
         username = request.form.get("username", "").strip()
@@ -379,26 +510,41 @@ def create_app():
         user_uuid = existing_user.get("uuid") if existing_user and existing_user.get("uuid") else str(uuid.uuid4())
         upsert_user(username, user_uuid, days, limit_gb)
         write_client_profile(username, server_ip, user_uuid)
+        restarted, msg = restart_v2ray_process()
+        if restarted:
+            flash("سرویس V2Ray برای اعمال تغییرات کاربر ری‌استارت شد.", "success")
+        else:
+            flash(f"تغییرات ذخیره شد، اما ری‌استارت خودکار V2Ray انجام نشد: {msg}", "warning")
         flash(f"کاربر {username} با انقضای {days} روزه ذخیره شد.", "success")
         return redirect(url_for("index"))
 
     @app.post("/deactivate/<username>")
     def route_deactivate(username):
         deactivate_user(username)
+        restart_v2ray_process()
         flash(f"کاربر {username} غیر فعال شد.", "warning")
         return redirect(url_for("index"))
 
     @app.post("/delete/<username>")
     def route_delete(username):
-        remove_user(username)
+        removed = remove_user(username)
+        if removed:
+            increment_activity_stat("deleted_users", 1)
+        restart_v2ray_process()
         flash(f"کاربر {username} حذف شد.", "danger")
         return redirect(url_for("index"))
 
     @app.post("/bulk-delete")
     def route_bulk_delete():
         usernames = request.form.getlist("selected_users")
+        removed_count = 0
         for username in usernames:
-            remove_user(username)
+            if remove_user(username):
+                removed_count += 1
+        if removed_count:
+            increment_activity_stat("deleted_users", removed_count)
+        if usernames:
+            restart_v2ray_process()
         flash(f"{len(usernames)} کاربر حذف شد.", "danger")
         return redirect(url_for("index"))
 
@@ -411,7 +557,8 @@ def create_app():
                 days = 30
         except ValueError:
             days = 30
-        extend_user(username, days)
+        if extend_user(username, days):
+            increment_activity_stat("extended_users", 1)
         flash(f"انقضای کاربر {username} به اندازه {days} روز تمدید شد.", "success")
         return redirect(url_for("index"))
 
