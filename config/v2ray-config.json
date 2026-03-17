@@ -26,7 +26,22 @@
       },
       "streamSettings": {
         "network": "tcp",
-        "security": "none"
+        "security": "none",
+        "tcpSettings": {
+          "header": {
+            "type": "http",
+            "request": {
+              "path": [
+                "/"
+              ],
+              "headers": {
+                "Host": [
+                  "uptvs.com"
+                ]
+              }
+            }
+          }
+        }
       },
       "sniffing": {
         "enabled": true,

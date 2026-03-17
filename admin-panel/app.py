@@ -41,6 +41,7 @@ CLIENT_NETWORK = os.environ.get("VPN_CLIENT_NETWORK", "tcp")
 CLIENT_TLS_ENABLED = os.environ.get("VPN_CLIENT_TLS", "0").lower() in ("1", "true", "yes")
 CLIENT_HOST = os.environ.get("VPN_CLIENT_HOST", "")
 CLIENT_PATH = os.environ.get("VPN_CLIENT_PATH", "")
+CLIENT_HEADER_TYPE = os.environ.get("VPN_CLIENT_HEADER_TYPE", "")
 
 
 def load_activity_stats():
@@ -402,6 +403,54 @@ def get_vmess_port(config):
     return "443"
 
 
+def get_vmess_stream_profile(config):
+    inbound = get_vmess_inbound(config)
+    if not inbound:
+        return {
+            "network": "tcp",
+            "tls": "",
+            "header_type": "none",
+            "host": "",
+            "path": "",
+        }
+
+    stream = inbound.get("streamSettings", {})
+    network = stream.get("network", "tcp")
+    security = stream.get("security", "none")
+    tls_value = "tls" if security == "tls" else ""
+
+    header_type = "none"
+    host_value = ""
+    path_value = ""
+
+    if network == "tcp":
+        tcp_settings = stream.get("tcpSettings", {})
+        header = tcp_settings.get("header", {})
+        header_type = header.get("type", "none")
+
+        request = header.get("request", {}) if header_type == "http" else {}
+        headers = request.get("headers", {})
+        host = headers.get("Host", "")
+        if isinstance(host, list):
+            host_value = host[0] if host else ""
+        elif isinstance(host, str):
+            host_value = host
+
+        path = request.get("path", "")
+        if isinstance(path, list):
+            path_value = path[0] if path else ""
+        elif isinstance(path, str):
+            path_value = path
+
+    return {
+        "network": network,
+        "tls": tls_value,
+        "header_type": header_type,
+        "host": host_value,
+        "path": path_value,
+    }
+
+
 def write_v2ray_config(config):
     with open(V2RAY_CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
@@ -480,12 +529,16 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
 
     config = read_v2ray_config()
     vmess_port = get_vmess_port(config)
+    stream_profile = get_vmess_stream_profile(config)
 
     profile_display_name = f"{PROFILE_NAME_PREFIX}{username}{PROFILE_NAME_SUFFIX}".strip()
-    network = CLIENT_NETWORK if CLIENT_NETWORK in ("tcp", "ws") else "tcp"
-    tls_value = "tls" if CLIENT_TLS_ENABLED else ""
-    host_value = CLIENT_HOST.strip()
-    path_value = CLIENT_PATH.strip()
+    network = CLIENT_NETWORK if CLIENT_NETWORK in ("tcp", "ws") else stream_profile["network"]
+    network = network if network in ("tcp", "ws") else "tcp"
+    tls_value = "tls" if CLIENT_TLS_ENABLED else stream_profile["tls"]
+    host_value = CLIENT_HOST.strip() if CLIENT_HOST.strip() else stream_profile["host"]
+    path_value = CLIENT_PATH.strip() if CLIENT_PATH.strip() else stream_profile["path"]
+    header_type = CLIENT_HEADER_TYPE.strip() if CLIENT_HEADER_TYPE.strip() else stream_profile["header_type"]
+    header_type = header_type if header_type in ("none", "http") else "none"
 
     # Create VMess config
     vmess_config = {
@@ -496,7 +549,7 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
         "id": user_uuid,
         "aid": "0",
         "net": network,
-        "type": "none",
+        "type": header_type,
         "host": host_value,
         "path": path_value,
         "tls": tls_value,
