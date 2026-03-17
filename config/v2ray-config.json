@@ -13,6 +13,11 @@
             "id": "1b598ec8-ed76-40fa-ac8f-63ff51314c20",
             "alterId": 0,
             "email": "1"
+          },
+          {
+            "id": "5e229aef-14ae-4703-a970-39b31205dcb8",
+            "alterId": 0,
+            "email": "omid"
           }
         ]
       },
@@ -37,12 +42,7 @@
   },
   "routing": {
     "domainStrategy": "AsIs",
-    "rules": [
-      {
-        "type": "field",
-        "outboundTag": "freedom"
-      }
-    ]
+    "rules": []
   },
   "api": {
     "tag": "api",
