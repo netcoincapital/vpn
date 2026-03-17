@@ -1,18 +1,21 @@
 {
   "log": {
-    "loglevel": "warning"
+    "access": "logs/access.log",
+    "error": "logs/error.log",
+    "loglevel": "info"
   },
   "inbounds": [
     {
-      "tag": "inbound",
-      "port": 443,
+      "tag": "vmess-in",
+      "port": 10443,
+      "listen": "0.0.0.0",
       "protocol": "vmess",
       "settings": {
         "clients": [
           {
             "id": "1b598ec8-ed76-40fa-ac8f-63ff51314c20",
             "alterId": 0,
-            "email": "1"
+            "email": "user1"
           },
           {
             "id": "5e229aef-14ae-4703-a970-39b31205dcb8",
@@ -29,26 +32,22 @@
   ],
   "outbounds": [
     {
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
     }
   ],
   "dns": {
     "servers": [
       "1.1.1.1",
-      "8.8.8.8",
-      "1.0.0.1",
-      "8.8.4.4"
+      "8.8.8.8"
     ]
   },
   "routing": {
     "domainStrategy": "AsIs",
     "rules": []
-  },
-  "api": {
-    "tag": "api",
-    "services": [
-      "StatsService"
-    ]
-  },
-  "stats": {}
+  }
 }

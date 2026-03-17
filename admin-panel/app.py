@@ -1,5 +1,4 @@
 import os
-import subprocess
 import uuid
 import base64
 import json
@@ -8,13 +7,15 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
-# مسیر فایل users.txt سرور V2Ray
-USERS_FILE = "/workspaces/vpn/server/users.txt"
-# مسیر فایل کانفیگ V2Ray
-V2RAY_CONFIG_FILE = "/workspaces/vpn/config/v2ray-config.json"
+# مسیرهای نسبی - روی ویندوز و لینوکس کار می‌کنند
+USERS_FILE = os.path.join(PROJECT_DIR, "server", "users.txt")
+V2RAY_CONFIG_FILE = os.path.join(PROJECT_DIR, "config", "v2ray-config.json")
+# لاگ دسترسی V2Ray برای تشخیص کاربران آنلاین
+V2RAY_ACCESS_LOG = os.path.join(PROJECT_DIR, "config", "logs", "access.log")
 # پوشه خروجی پروفایل کلاینت‌ها
-CLIENTS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "client"))
+CLIENTS_DIR = os.path.join(PROJECT_DIR, "client")
 
 # تنظیمات ساده برای احراز هویت پنل مدیریت
 ADMIN_USERNAME = os.environ.get("VPN_ADMIN_USER", "admin")
@@ -68,6 +69,35 @@ def read_users():
                 }
             )
     return users
+
+
+def get_online_usernames():
+    """کاربرانی که در ۵ دقیقه اخیر در لاگ V2Ray فعالیت داشته‌اند آنلاین محسوب می‌شوند."""
+    online = set()
+    if not os.path.exists(V2RAY_ACCESS_LOG):
+        return online
+
+    cutoff = datetime.now() - timedelta(minutes=5)
+    try:
+        with open(V2RAY_ACCESS_LOG, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                # فرمت لاگ V2Ray:
+                # 2026/03/17 10:00:00 accepted tcp:google.com:443 [vmess-in >> direct] email: omid
+                if "email:" not in line:
+                    continue
+                try:
+                    date_part = line[:19]  # "2026/03/17 10:00:00"
+                    log_time = datetime.strptime(date_part, "%Y/%m/%d %H:%M:%S")
+                    if log_time >= cutoff:
+                        email_idx = line.index("email:") + len("email:")
+                        username = line[email_idx:].strip().split()[0].strip()
+                        if username:
+                            online.add(username.lower())
+                except (ValueError, IndexError):
+                    continue
+    except OSError:
+        pass
+    return online
 
 
 def write_users(users):
@@ -281,6 +311,9 @@ def create_app():
     @app.route("/")
     def index():
         users = read_users()
+        online_users = get_online_usernames()
+        for u in users:
+            u["is_online"] = u["username"].lower() in online_users
         return render_template("index.html", users=users)
 
     @app.post("/add")

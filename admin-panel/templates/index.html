@@ -32,6 +32,12 @@
       .badge-status-invalid-date {
         background: linear-gradient(135deg, #f97316, #c2410c);
       }
+      .badge-online {
+        background: linear-gradient(135deg, #22c55e, #15803d);
+      }
+      .badge-offline {
+        background: linear-gradient(135deg, #6b7280, #374151);
+      }
       .table-dark th,
       .table-dark td {
         vertical-align: middle;
@@ -170,6 +176,7 @@
                         <th>تاریخ انقضا</th>
                         <th>محدودیت (گیگ)</th>
                         <th>وضعیت</th>
+                        <th>وضعیت اتصال</th>
                         <th class="text-center">عملیات</th>
                         <th class="text-center">دانلود کانفیگ</th>
                       </tr>
@@ -177,7 +184,7 @@
                     <tbody>
                       {% if not users %}
                       <tr>
-                        <td colspan="7" class="text-center text-secondary">
+                        <td colspan="8" class="text-center text-secondary">
                           هیچ کاربری ثبت نشده است.
                         </td>
                       </tr>
@@ -207,6 +214,13 @@
                           <span class="badge badge-status-invalid-date"
                             >تاریخ نامعتبر</span
                           >
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if u.is_online %}
+                          <span class="badge badge-online">online</span>
+                          {% else %}
+                          <span class="badge badge-offline">offline</span>
                           {% endif %}
                         </td>
                         <td class="text-center">
