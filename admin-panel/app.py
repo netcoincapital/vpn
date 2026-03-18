@@ -20,7 +20,12 @@ ACTIVITY_STATS_FILE = os.path.join(PROJECT_DIR, "server", "activity_stats.json")
 V2RAY_ACCESS_LOG = os.path.join(PROJECT_DIR, "logs", "access.log")
 # پوشه خروجی پروفایل کلاینت‌ها
 CLIENTS_DIR = os.path.join(PROJECT_DIR, "client")
-V2RAY_BIN = os.environ.get("V2RAY_BIN", os.path.join(PROJECT_DIR, "v2ray.exe"))
+# تشخیص باینری V2Ray بر اساس سیستم‌عامل
+if os.name == "nt":
+    _v2ray_default = os.path.join(PROJECT_DIR, "v2ray.exe")
+else:
+    _v2ray_default = "v2ray"  # روی Linux/Mac از path استفاده کن
+V2RAY_BIN = os.environ.get("V2RAY_BIN", _v2ray_default)
 AUTO_RESTART_V2RAY = os.environ.get("VPN_AUTO_RESTART_V2RAY", "1").lower() in (
     "1",
     "true",
@@ -717,7 +722,7 @@ def restart_v2ray_process():
             stderr=subprocess.DEVNULL,
         )
         subprocess.Popen(
-            ["v2ray", "run", "-config", V2RAY_CONFIG_FILE],
+            [V2RAY_BIN, "run", "-config", V2RAY_CONFIG_FILE],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
