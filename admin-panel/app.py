@@ -4,6 +4,7 @@ import uuid
 import base64
 import json
 import re
+import shutil
 from urllib.parse import quote
 from datetime import datetime, timedelta
 
@@ -49,6 +50,30 @@ CLIENT_HOST = os.environ.get("VPN_CLIENT_HOST", "")
 CLIENT_PATH = os.environ.get("VPN_CLIENT_PATH", "")
 CLIENT_HEADER_TYPE = os.environ.get("VPN_CLIENT_HEADER_TYPE", "")
 PREFERRED_PROFILE_PROTOCOL = os.environ.get("VPN_PROFILE_PROTOCOL", "vless").lower()
+
+# ─── تنظیمات OpenVPN ────────────────────────────────────────────────────────
+OPENVPN_USERS_FILE = os.path.join(PROJECT_DIR, "server", "openvpn-users.txt")
+OPENVPN_CLIENTS_DIR = os.path.join(PROJECT_DIR, "client", "openvpn")
+OPENVPN_PKI_DIR = os.environ.get("OPENVPN_PKI_DIR", "/etc/openvpn/easy-rsa/pki")
+OPENVPN_SERVER_DIR = os.environ.get("OPENVPN_SERVER_DIR", "/etc/openvpn/server")
+OPENVPN_EASYRSA_DIR = os.environ.get("OPENVPN_EASYRSA_DIR", "/etc/openvpn/easy-rsa")
+OPENVPN_SERVER_IP = os.environ.get("OPENVPN_SERVER_IP", "")
+OPENVPN_PORT = os.environ.get("OPENVPN_PORT", "1194")
+OPENVPN_PROTO = os.environ.get("OPENVPN_PROTO", "udp")
+# regex اعتبارسنجی نام کاربری — فقط حروف، اعداد، خط تیره، آندرلاین
+_USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
+
+# ─── تنظیمات OpenVPN ────────────────────────────────────────────────────────
+OPENVPN_USERS_FILE = os.path.join(PROJECT_DIR, "server", "openvpn-users.txt")
+OPENVPN_CLIENTS_DIR = os.path.join(PROJECT_DIR, "client", "openvpn")
+OPENVPN_PKI_DIR = os.environ.get("OPENVPN_PKI_DIR", "/etc/openvpn/easy-rsa/pki")
+OPENVPN_SERVER_DIR = os.environ.get("OPENVPN_SERVER_DIR", "/etc/openvpn/server")
+OPENVPN_EASYRSA_DIR = os.environ.get("OPENVPN_EASYRSA_DIR", "/etc/openvpn/easy-rsa")
+OPENVPN_SERVER_IP = os.environ.get("OPENVPN_SERVER_IP", "")
+OPENVPN_PORT = os.environ.get("OPENVPN_PORT", "1194")
+OPENVPN_PROTO = os.environ.get("OPENVPN_PROTO", "udp")
+# regex اعتبارسنجی نام کاربری — فقط حروف، اعداد، خط تیره، آندرلاین
+_USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
 def load_activity_stats():
@@ -732,6 +757,372 @@ def restart_v2ray_process():
         return False, str(exc)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  OpenVPN — توابع کمکی
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _validate_ovpn_username(username: str) -> bool:
+    """بررسی می‌کند که نام کاربر فقط شامل کاراکترهای مجاز است (جلوگیری از command injection)."""
+    return bool(_USERNAME_PATTERN.match(username))
+
+
+def openvpn_is_installed() -> bool:
+    """بررسی وجود PKI و فایل‌های گواهی OpenVPN."""
+    ca_path = os.path.join(OPENVPN_PKI_DIR, "ca.crt")
+    ta_path = os.path.join(OPENVPN_SERVER_DIR, "ta.key")
+    easyrsa = os.path.join(OPENVPN_EASYRSA_DIR, "easyrsa")
+    return os.path.exists(ca_path) and os.path.exists(ta_path) and os.path.exists(easyrsa)
+
+
+def read_openvpn_users() -> list:
+    """خواندن فایل openvpn-users.txt و برگرداندن لیست دیکشنری‌های کاربران."""
+    users = []
+    if not os.path.exists(OPENVPN_USERS_FILE):
+        return users
+
+    today = datetime.now().date()
+    with open(OPENVPN_USERS_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            raw = line.rstrip("\n")
+            if not raw or raw.lstrip().startswith("#"):
+                continue
+            parts = raw.split(":")
+            username = parts[0].strip()
+            expiry_str = parts[1].strip() if len(parts) >= 2 else ""
+            limit_gb = None
+            if len(parts) >= 3:
+                try:
+                    limit_gb = float(parts[2].strip())
+                except ValueError:
+                    limit_gb = None
+
+            expiry_date = None
+            status = "unknown"
+            try:
+                if expiry_str:
+                    expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                    status = "expired" if expiry_date < today else "active"
+                else:
+                    status = "no-expiry"
+            except ValueError:
+                status = "invalid-date"
+
+            ovpn_path = os.path.join(OPENVPN_CLIENTS_DIR, f"{username}.ovpn")
+            users.append({
+                "username": username,
+                "expiry_str": expiry_str,
+                "expiry_date": expiry_date,
+                "status": status,
+                "limit_gb": limit_gb,
+                "raw": raw,
+                "has_config": os.path.exists(ovpn_path),
+            })
+    return users
+
+
+def write_openvpn_users(users: list) -> None:
+    """نوشتن لیست کاربران در فایل openvpn-users.txt."""
+    os.makedirs(os.path.dirname(OPENVPN_USERS_FILE), exist_ok=True)
+    lines = []
+    for u in users:
+        if u.get("commented"):
+            lines.append(f"# {u['raw']}")
+        else:
+            expiry = u.get("expiry_str") or ""
+            limit_gb = u.get("limit_gb")
+            if limit_gb is not None:
+                lines.append(f"{u['username']}:{expiry}:{limit_gb}")
+            else:
+                lines.append(f"{u['username']}:{expiry}")
+    with open(OPENVPN_USERS_FILE, "w", encoding="utf-8") as f:
+        f.write("# لیست کاربران OpenVPN - تولید شده توسط پنل مدیریت\n")
+        f.write("# یوزرنیم:تاریخ_انقضا:محدودیت_گیگ (اختیاری)\n")
+        for line in lines:
+            f.write(line + "\n")
+
+
+def get_openvpn_user(username: str):
+    """پیدا کردن کاربر OpenVPN با نام کاربری."""
+    username = username.strip().lower()
+    for u in read_openvpn_users():
+        if u["username"].strip().lower() == username:
+            return u
+    return None
+
+
+def _run_easyrsa(args: list, timeout: int = 120):
+    """اجرای دستور easyrsa با امنیت کامل."""
+    easyrsa_bin = os.path.join(OPENVPN_EASYRSA_DIR, "easyrsa")
+    if not os.path.exists(easyrsa_bin):
+        return False, f"easyrsa پیدا نشد: {easyrsa_bin}"
+    try:
+        env = os.environ.copy()
+        env["EASYRSA_BATCH"] = "1"
+        env["EASYRSA_PKI"] = OPENVPN_PKI_DIR
+        result = subprocess.run(
+            [easyrsa_bin] + args,
+            cwd=OPENVPN_EASYRSA_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            return True, result.stdout
+        return False, result.stderr or result.stdout
+    except subprocess.TimeoutExpired:
+        return False, "دستور easyrsa time-out شد"
+    except OSError as exc:
+        return False, str(exc)
+
+
+def generate_openvpn_client_cert(username: str):
+    """ساخت گواهی کلاینت با EasyRSA برای کاربر داده‌شده."""
+    if not _validate_ovpn_username(username):
+        return False, "نام کاربری نامعتبر است"
+
+    cert_path = os.path.join(OPENVPN_PKI_DIR, "issued", f"{username}.crt")
+    key_path = os.path.join(OPENVPN_PKI_DIR, "private", f"{username}.key")
+
+    # اگر گواهی قبلاً وجود دارد، ابتدا revoke کن
+    if os.path.exists(cert_path) or os.path.exists(key_path):
+        _run_easyrsa(["revoke", username])
+        for path in (cert_path, key_path,
+                     os.path.join(OPENVPN_PKI_DIR, "reqs", f"{username}.req")):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+    ok, msg = _run_easyrsa(["gen-req", username, "nopass"])
+    if not ok:
+        return False, f"خطا در gen-req: {msg}"
+
+    ok, msg = _run_easyrsa(["sign-req", "client", username])
+    if not ok:
+        return False, f"خطا در sign-req: {msg}"
+
+    return True, "گواهی با موفقیت ساخته شد"
+
+
+def revoke_openvpn_client_cert(username: str):
+    """ابطال گواهی کلاینت و به‌روزرسانی CRL."""
+    if not _validate_ovpn_username(username):
+        return False, "نام کاربری نامعتبر است"
+    ok, msg = _run_easyrsa(["revoke", username])
+    if not ok:
+        return False, f"خطا در revoke: {msg}"
+    _run_easyrsa(["gen-crl"])
+    return True, "گواهی ابطال شد"
+
+
+def _read_file_content(path: str) -> str:
+    """خواندن محتوای فایل به صورت امن."""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def build_ovpn_config(username: str, server_ip: str):
+    """ساخت فایل .ovpn کامل با گواهی‌های Embed شده برای کاربر."""
+    if not _validate_ovpn_username(username):
+        return None
+
+    ca_path = os.path.join(OPENVPN_PKI_DIR, "ca.crt")
+    cert_path = os.path.join(OPENVPN_PKI_DIR, "issued", f"{username}.crt")
+    key_path = os.path.join(OPENVPN_PKI_DIR, "private", f"{username}.key")
+    ta_path = os.path.join(OPENVPN_SERVER_DIR, "ta.key")
+
+    for path in (ca_path, cert_path, key_path, ta_path):
+        if not os.path.exists(path):
+            return None
+
+    ca_content = _read_file_content(ca_path)
+    ta_content = _read_file_content(ta_path)
+
+    # استخراج بخش گواهی از فایل .crt (ممکن است سربرگ‌های اضافی داشته باشد)
+    cert_content = _read_file_content(cert_path)
+    cert_match = re.search(
+        r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+        cert_content,
+        re.DOTALL,
+    )
+    cert_clean = cert_match.group(1) if cert_match else cert_content
+
+    key_content = _read_file_content(key_path)
+
+    ovpn = (
+        f"# کانفیگ OpenVPN برای کاربر: {username}\n"
+        f"# تولید شده توسط پنل مدیریت VPN\n"
+        f"client\n"
+        f"dev tun\n"
+        f"proto {OPENVPN_PROTO}\n"
+        f"remote {server_ip} {OPENVPN_PORT}\n"
+        f"resolv-retry infinite\n"
+        f"nobind\n"
+        f"persist-key\n"
+        f"persist-tun\n"
+        f"cipher AES-256-GCM\n"
+        f"auth SHA256\n"
+        f"tls-client\n"
+        f"tls-version-min 1.2\n"
+        f"key-direction 1\n"
+        f"verb 3\n\n"
+        f"<ca>\n{ca_content}\n</ca>\n\n"
+        f"<cert>\n{cert_clean}\n</cert>\n\n"
+        f"<key>\n{key_content}\n</key>\n\n"
+        f"<tls-auth>\n{ta_content}\n</tls-auth>\n"
+    )
+    return ovpn
+
+
+def write_openvpn_client_config(username: str, server_ip: str) -> bool:
+    """نوشتن فایل .ovpn کلاینت در پوشه client/openvpn/."""
+    if not _validate_ovpn_username(username):
+        return False
+    ovpn_content = build_ovpn_config(username, server_ip)
+    if ovpn_content is None:
+        return False
+    os.makedirs(OPENVPN_CLIENTS_DIR, exist_ok=True)
+    out_path = os.path.join(OPENVPN_CLIENTS_DIR, f"{username}.ovpn")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(ovpn_content)
+    return True
+
+
+def create_openvpn_user(username: str, days: int, limit_gb=None, server_ip: str = ""):
+    """ایجاد کاربر جدید OpenVPN: ثبت در فایل + ساخت گواهی + ساخت .ovpn."""
+    if not _validate_ovpn_username(username):
+        return False, "نام کاربری نامعتبر است (فقط A-Z, 0-9, _ و - مجاز هستند)"
+
+    if openvpn_is_installed():
+        ok, msg = generate_openvpn_client_cert(username)
+        if not ok:
+            return False, msg
+
+    users = read_openvpn_users()
+    expiry_str = ""
+    if days > 0:
+        expiry_str = (datetime.now().date() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    raw_line = f"{username}:{expiry_str}:{limit_gb}" if limit_gb is not None else f"{username}:{expiry_str}"
+    found = False
+    for u in users:
+        if u["username"].lower() == username.lower():
+            u["expiry_str"] = expiry_str
+            u["limit_gb"] = limit_gb
+            u["commented"] = False
+            u["raw"] = raw_line
+            found = True
+            break
+    if not found:
+        users.append({
+            "username": username,
+            "expiry_str": expiry_str,
+            "limit_gb": limit_gb,
+            "commented": False,
+            "raw": raw_line,
+        })
+    write_openvpn_users(users)
+
+    effective_ip = server_ip or OPENVPN_SERVER_IP or "YOUR_SERVER_IP"
+    if openvpn_is_installed():
+        write_openvpn_client_config(username, effective_ip)
+
+    return True, f"کاربر {username} با موفقیت ایجاد شد"
+
+
+def deactivate_openvpn_user(username: str) -> bool:
+    """غیرفعال‌سازی کاربر OpenVPN (comment کردن در فایل + ابطال گواهی)."""
+    if not _validate_ovpn_username(username):
+        return False
+    users = read_openvpn_users()
+    found = False
+    for u in users:
+        if u["username"].lower() == username.lower():
+            u["commented"] = True
+            found = True
+            break
+    if found:
+        write_openvpn_users(users)
+        if openvpn_is_installed():
+            revoke_openvpn_client_cert(username)
+    return found
+
+
+def delete_openvpn_user(username: str) -> bool:
+    """حذف کامل کاربر OpenVPN از فایل + ابطال گواهی + حذف .ovpn."""
+    if not _validate_ovpn_username(username):
+        return False
+    users = read_openvpn_users()
+    new_users = [u for u in users if u["username"].lower() != username.lower()]
+    removed = len(new_users) < len(users)
+    if removed:
+        write_openvpn_users(new_users)
+        if openvpn_is_installed():
+            revoke_openvpn_client_cert(username)
+        ovpn_path = os.path.join(OPENVPN_CLIENTS_DIR, f"{username}.ovpn")
+        if os.path.exists(ovpn_path):
+            os.remove(ovpn_path)
+    return removed
+
+
+def extend_openvpn_user(username: str, days: int) -> bool:
+    """تمدید انقضای کاربر OpenVPN."""
+    if not _validate_ovpn_username(username):
+        return False
+    users = read_openvpn_users()
+    today = datetime.now().date()
+    extended = False
+    for u in users:
+        if u["username"].lower() == username.lower():
+            try:
+                base = datetime.strptime(u["expiry_str"], "%Y-%m-%d").date() if u["expiry_str"] else today
+            except ValueError:
+                base = today
+            u["expiry_str"] = (base + timedelta(days=days)).strftime("%Y-%m-%d")
+            u["commented"] = False
+            extended = True
+            break
+    if extended:
+        write_openvpn_users(users)
+    return extended
+
+
+def get_openvpn_summary() -> dict:
+    """خلاصه آمار کاربران OpenVPN."""
+    total = active = inactive = 0
+    if os.path.exists(OPENVPN_USERS_FILE):
+        with open(OPENVPN_USERS_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw or raw.startswith("# لیست") or raw.startswith("# یوزر"):
+                    continue
+                if raw.startswith("#"):
+                    payload = raw[1:].strip()
+                    if payload and ":" in payload:
+                        inactive += 1
+                        total += 1
+                    continue
+                if ":" in raw:
+                    active += 1
+                    total += 1
+    return {"total": total, "active": active, "inactive": inactive}
+
+
+def restart_openvpn_service():
+    """ری‌استارت سرویس OpenVPN برای اعمال CRL به‌روز شده."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "reload-or-restart", "openvpn-server@server"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return True, "سرویس OpenVPN ری‌استارت شد"
+        return False, result.stderr.strip() or "خطا در ری‌استارت"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("VPN_ADMIN_SECRET", "change-this-secret")
@@ -770,7 +1161,14 @@ def create_app():
         online_users = get_online_usernames()
         for u in users:
             u["is_online"] = u["username"].lower() in online_users
-        return render_template("index.html", users=users)
+        ovpn_users = read_openvpn_users()
+        return render_template(
+            "index.html",
+            users=users,
+            ovpn_users=ovpn_users,
+            ovpn_installed=openvpn_is_installed(),
+            ovpn_server_ip=OPENVPN_SERVER_IP or "",
+        )
 
     @app.get("/stats")
     def stats_page():
@@ -887,6 +1285,119 @@ def create_app():
             download_name=f"{username}.txt",
         )
 
+    # ──────────────────────────────────────────────────────────────────────────
+    #  مسیرهای OpenVPN
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @app.get("/openvpn")
+    def openvpn_page():
+        users = read_openvpn_users()
+        installed = openvpn_is_installed()
+        summary = get_openvpn_summary()
+        return render_template(
+            "openvpn.html",
+            users=users,
+            installed=installed,
+            summary=summary,
+            server_ip=OPENVPN_SERVER_IP or "",
+        )
+
+    @app.post("/openvpn/add")
+    def openvpn_add():
+        from flask import send_file as _sf
+
+        username = request.form.get("username", "").strip()
+        days_str = request.form.get("days", "30").strip()
+        limit_str = request.form.get("limit_gb", "").strip()
+        server_ip = request.form.get("server_ip", OPENVPN_SERVER_IP or "").strip()
+
+        if not username:
+            flash("یوزرنیم الزامی است.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        if not _validate_ovpn_username(username):
+            flash("یوزرنیم نامعتبر است — فقط حروف انگلیسی، اعداد، خط تیره و آندرلاین مجاز هستند.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        try:
+            days = max(1, int(days_str))
+        except ValueError:
+            days = 30
+
+        limit_gb = None
+        if limit_str:
+            try:
+                limit_gb = float(limit_str)
+                if limit_gb <= 0:
+                    limit_gb = None
+            except ValueError:
+                limit_gb = None
+
+        ok, msg = create_openvpn_user(username, days, limit_gb, server_ip)
+        if ok:
+            flash(f"کاربر OpenVPN «{username}» با اعتبار {days} روزه ایجاد شد.", "success")
+        else:
+            flash(f"خطا در ایجاد کاربر: {msg}", "danger")
+
+        return redirect(url_for("index") + "?tab=openvpn")
+
+    @app.post("/openvpn/deactivate/<username>")
+    def openvpn_deactivate(username):
+        if deactivate_openvpn_user(username):
+            restart_openvpn_service()
+            flash(f"کاربر OpenVPN «{username}» غیرفعال شد.", "warning")
+        else:
+            flash(f"کاربر «{username}» پیدا نشد.", "danger")
+        return redirect(url_for("index") + "?tab=openvpn")
+
+    @app.post("/openvpn/delete/<username>")
+    def openvpn_delete(username):
+        if delete_openvpn_user(username):
+            restart_openvpn_service()
+            flash(f"کاربر OpenVPN «{username}» حذف شد.", "danger")
+        else:
+            flash(f"کاربر «{username}» پیدا نشد.", "danger")
+        return redirect(url_for("index") + "?tab=openvpn")
+
+    @app.post("/openvpn/extend/<username>")
+    def openvpn_extend(username):
+        days_str = request.form.get("days", "30").strip()
+        try:
+            days = max(1, int(days_str))
+        except ValueError:
+            days = 30
+        if extend_openvpn_user(username, days):
+            flash(f"اعتبار کاربر OpenVPN «{username}» به اندازه {days} روز تمدید شد.", "success")
+        else:
+            flash(f"کاربر «{username}» پیدا نشد.", "danger")
+        return redirect(url_for("index") + "?tab=openvpn")
+
+    @app.get("/openvpn/download/<username>")
+    def openvpn_download(username):
+        from flask import send_file as _sf
+
+        if not _validate_ovpn_username(username):
+            flash("نام کاربری نامعتبر است.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        ovpn_path = os.path.join(OPENVPN_CLIENTS_DIR, f"{username}.ovpn")
+
+        # اگر فایل وجود ندارد ولی گواهی وجود دارد، دوباره بساز
+        if not os.path.exists(ovpn_path) and openvpn_is_installed():
+            effective_ip = OPENVPN_SERVER_IP or "YOUR_SERVER_IP"
+            write_openvpn_client_config(username, effective_ip)
+
+        if not os.path.exists(ovpn_path):
+            flash("فایل .ovpn برای این کاربر موجود نیست. لطفاً ابتدا OpenVPN را نصب و PKI را راه‌اندازی کنید.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        return _sf(
+            ovpn_path,
+            as_attachment=True,
+            download_name=f"{username}.ovpn",
+            mimetype="application/x-openvpn-profile",
+        )
+
     return app
 
 
@@ -895,4 +1406,5 @@ app = create_app()
 if __name__ == "__main__":
     port = int(os.environ.get("VPN_ADMIN_PORT", "5000"))
     app.run(host="127.0.0.1", port=port, debug=False)
+
 

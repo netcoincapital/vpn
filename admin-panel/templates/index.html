@@ -2,7 +2,7 @@
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="utf-8" />
-    <title>مدیریت کاربران VPN</title>
+    <title>پنل مدیریت VPN</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.rtl.min.css"
@@ -20,31 +20,14 @@
         box-shadow: 0 24px 80px rgba(15, 23, 42, 0.9);
         backdrop-filter: blur(22px);
       }
-      .badge-status-active {
-        background: linear-gradient(135deg, #22c55e, #16a34a);
-      }
-      .badge-status-expired {
-        background: linear-gradient(135deg, #ef4444, #b91c1c);
-      }
-      .badge-status-no-expiry {
-        background: linear-gradient(135deg, #0ea5e9, #0369a1);
-      }
-      .badge-status-invalid-date {
-        background: linear-gradient(135deg, #f97316, #c2410c);
-      }
-      .badge-online {
-        background: linear-gradient(135deg, #22c55e, #15803d);
-      }
-      .badge-offline {
-        background: linear-gradient(135deg, #6b7280, #374151);
-      }
-      .table-dark th,
-      .table-dark td {
-        vertical-align: middle;
-      }
-      .table-dark tr:hover td {
-        background-color: rgba(31, 41, 55, 0.9);
-      }
+      .badge-status-active   { background: linear-gradient(135deg, #22c55e, #16a34a); }
+      .badge-status-expired  { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+      .badge-status-no-expiry{ background: linear-gradient(135deg, #0ea5e9, #0369a1); }
+      .badge-status-invalid-date { background: linear-gradient(135deg, #f97316, #c2410c); }
+      .badge-online  { background: linear-gradient(135deg, #22c55e, #15803d); }
+      .badge-offline { background: linear-gradient(135deg, #6b7280, #374151); }
+      .table-dark th, .table-dark td { vertical-align: middle; }
+      .table-dark tr:hover td { background-color: rgba(31, 41, 55, 0.9); }
       .glass-input {
         background: rgba(15, 23, 42, 0.8);
         border-color: rgba(148, 163, 184, 0.4);
@@ -65,9 +48,7 @@
         background: linear-gradient(135deg, #22c55e, #16a34a);
         color: white;
       }
-      .form-label {
-        color: #e5e7eb;
-      }
+      .form-label { color: #e5e7eb; }
       .menu-btn {
         border: 1px solid rgba(148, 163, 184, 0.4);
         color: #e2e8f0;
@@ -95,9 +76,56 @@
         border-color: #38bdf8;
         background: rgba(56, 189, 248, 0.15);
       }
+
+      /* ─── Protocol Switcher ───────────────────────────── */
+      .proto-switcher {
+        display: inline-flex;
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 2rem;
+        padding: 4px;
+        gap: 4px;
+      }
+      .proto-switcher .proto-btn {
+        border: none;
+        border-radius: 1.75rem;
+        padding: 0.45rem 1.35rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+        color: #94a3b8;
+        background: transparent;
+      }
+      .proto-switcher .proto-btn.active-v2ray {
+        background: linear-gradient(135deg, #6366f1, #0ea5e9);
+        color: #fff;
+        box-shadow: 0 2px 12px rgba(99, 102, 241, 0.5);
+      }
+      .proto-switcher .proto-btn.active-ovpn {
+        background: linear-gradient(135deg, #f97316, #ef4444);
+        color: #fff;
+        box-shadow: 0 2px 12px rgba(249, 115, 22, 0.5);
+      }
+      .proto-switcher .proto-btn:not(.active-v2ray):not(.active-ovpn):hover {
+        color: #e2e8f0;
+        background: rgba(148, 163, 184, 0.1);
+      }
+      .proto-label-v2ray { color: #818cf8; font-weight: 700; }
+      .proto-label-ovpn  { color: #fb923c; font-weight: 700; }
+
+      /* ─── Alert setup ─────────────────────────────────── */
+      .alert-setup {
+        background: rgba(251, 191, 36, 0.12);
+        border: 1px solid rgba(251, 191, 36, 0.4);
+        color: #fde68a;
+        border-radius: 0.75rem;
+      }
     </style>
   </head>
   <body>
+
+    <!-- ─── Sidebar Offcanvas ────────────────────────────────────── -->
     <div class="offcanvas offcanvas-start" tabindex="-1" id="mainMenu" aria-labelledby="mainMenuLabel">
       <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="mainMenuLabel">منوی مدیریت</h5>
@@ -105,8 +133,8 @@
       </div>
       <div class="offcanvas-body">
         <div class="nav flex-column">
-          <a class="nav-link active" href="{{ url_for('index') }}">کاربران</a>
-          <a class="nav-link" href="{{ url_for('stats_page') }}">آمار کاربران</a>
+          <a class="nav-link active" href="{{ url_for('index') }}">🏠 مدیریت کاربران</a>
+          <a class="nav-link" href="{{ url_for('stats_page') }}">📊 آمار کاربران</a>
         </div>
       </div>
     </div>
@@ -114,139 +142,267 @@
     <div class="container py-4">
       <div class="row justify-content-center">
         <div class="col-12 col-xl-10">
-          <div class="d-flex justify-content-between align-items-center mb-3">
+
+          <!-- ─── Header ───────────────────────────────────────────── -->
+          <div class="d-flex justify-content-between align-items-center mb-4">
             <button
               class="btn menu-btn"
               type="button"
               data-bs-toggle="offcanvas"
               data-bs-target="#mainMenu"
               aria-controls="mainMenu"
-            >
-              ☰ منو
-            </button>
-            <div>
+            >☰ منو</button>
+            <div class="text-center">
               <h3 class="fw-bold mb-1">پنل مدیریت کاربران VPN</h3>
-              <p class="text-secondary mb-0">
-                مدیریت یوزرها، تاریخ انقضا و غیرفعال‌سازی حساب‌ها
-              </p>
+              <p class="text-secondary mb-0 small">ایجاد کانفیگ، مدیریت کاربران و دانلود پروفایل</p>
+            </div>
+            <div style="width: 64px"></div>
+          </div>
+
+          <!-- ─── Protocol Switcher ────────────────────────────────── -->
+          <div class="d-flex justify-content-center mb-4">
+            <div class="proto-switcher" role="group" aria-label="انتخاب پروتکل">
+              <button type="button" id="btn-v2ray" class="proto-btn" onclick="switchProto('v2ray')">
+                🔷 V2Ray
+              </button>
+              <button type="button" id="btn-ovpn" class="proto-btn" onclick="switchProto('openvpn')">
+                🔶 OpenVPN
+              </button>
             </div>
           </div>
 
+          <!-- ─── Flash Messages ─────────────────────────────────── -->
           {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
-          <div class="mb-3">
+          <div class="mb-3" id="flash-container">
             {% for category, message in messages %}
-            <div
-              class="alert alert-{{ 'danger' if category == 'danger' else 'secondary' }} alert-dismissible fade show"
-              role="alert"
-            >
+            <div class="alert alert-{{ 'danger' if category == 'danger' else ('warning' if category == 'warning' else 'secondary') }} alert-dismissible fade show" role="alert">
               {{ message }}
-              <button
-                type="button"
-                class="btn-close"
-                data-bs-dismiss="alert"
-                aria-label="Close"
-              ></button>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
             {% endfor %}
           </div>
           {% endif %}
           {% endwith %}
 
-          <div class="card mb-4">
-            <div class="card-body">
-              <h5 class="card-title mb-3">ایجاد / ویرایش کاربر</h5>
-              <form method="post" action="{{ url_for('add') }}" class="row g-3">
-                <div class="col-md-4">
-                  <label class="form-label">یوزرنیم</label>
-                  <input
-                    type="text"
-                    name="username"
-                    class="form-control glass-input"
-                    required
-                  />
-                </div>
-                <div class="col-md-4">
-                  <label class="form-label">روز اعتبار</label>
-                  <input
-                    type="number"
-                    name="days"
-                    class="form-control glass-input"
-                    value="30"
-                    min="1"
-                  />
-                </div>                <div class="col-md-2">
-                  <label class="form-label">محدودیت (گیگ)</label>
-                  <input
-                    type="number"
-                    name="limit_gb"
-                    class="form-control glass-input"
-                    placeholder="مثال: 5"
-                    min="0"
-                    step="0.1"
-                  />
-                </div>                <div class="col-md-4">
-                  <label class="form-label">IP سرور (برای ساخت فایل کانفیگ)</label>
-                  <input
-                    type="text"
-                    name="server_ip"
-                    class="form-control glass-input"
-                    placeholder="مثال: 81.214.86.32"
-                    value="81.214.86.32"
-                  />
-                </div>
-                <div class="col-md-2 d-flex align-items-end">
-                  <button type="submit" class="btn btn-gradient w-100">
-                    ذخیره کاربر
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
+          <!-- ════════════════════════════════════════════════════════
+               TAB: V2RAY
+          ═══════════════════════════════════════════════════════════ -->
+          <div id="tab-v2ray">
 
-          <div class="card">
-            <div class="card-body">
-              <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5 class="card-title mb-0">لیست کاربران</h5>
-                <span class="text-secondary small">
-                  {{ users|length }} کاربر
-                </span>
+            <!-- فرم ایجاد کاربر V2Ray -->
+            <div class="card mb-4">
+              <div class="card-body">
+                <h5 class="card-title mb-1">
+                  <span class="proto-label-v2ray">V2Ray</span> — ایجاد / ویرایش کاربر
+                </h5>
+                <p class="text-secondary small mb-3">کاربر جدید با UUID خودکار ساخته می‌شود. پروفایل VMess + VLESS با هم تولید می‌شود.</p>
+                <form method="post" action="{{ url_for('add') }}" class="row g-3">
+                  <div class="col-md-3">
+                    <label class="form-label">یوزرنیم</label>
+                    <input type="text" name="username" class="form-control glass-input" required />
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">روز اعتبار</label>
+                    <input type="number" name="days" class="form-control glass-input" value="30" min="1" />
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">محدودیت (گیگ)</label>
+                    <input type="number" name="limit_gb" class="form-control glass-input" placeholder="مثال: 5" min="0" step="0.1" />
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">IP سرور</label>
+                    <input type="text" name="server_ip" class="form-control glass-input" placeholder="مثال: 81.214.86.32" value="81.214.86.32" />
+                  </div>
+                  <div class="col-md-2 d-flex align-items-end">
+                    <button type="submit" class="btn btn-gradient w-100">ذخیره</button>
+                  </div>
+                </form>
               </div>
+            </div>
 
-              <form method="post" action="{{ url_for('route_bulk_delete') }}">
+            <!-- جدول کاربران V2Ray -->
+            <div class="card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h5 class="card-title mb-0">
+                    <span class="proto-label-v2ray">V2Ray</span> — لیست کاربران
+                  </h5>
+                  <span class="text-secondary small">{{ users|length }} کاربر</span>
+                </div>
+
+                <form method="post" action="{{ url_for('route_bulk_delete') }}">
+                  <div class="table-responsive">
+                    <table class="table table-dark table-striped align-middle">
+                      <thead>
+                        <tr>
+                          <th><input type="checkbox" id="select-all" /></th>
+                          <th>یوزرنیم</th>
+                          <th>تاریخ انقضا</th>
+                          <th>حجم (گیگ)</th>
+                          <th>وضعیت</th>
+                          <th>اتصال</th>
+                          <th class="text-center">عملیات</th>
+                          <th class="text-center">کانفیگ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% if not users %}
+                        <tr>
+                          <td colspan="8" class="text-center text-secondary py-4">
+                            هیچ کاربری ثبت نشده است.
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% for u in users %}
+                        <tr>
+                          <td><input type="checkbox" name="selected_users" value="{{ u.username }}" /></td>
+                          <td class="fw-semibold">{{ u.username }}</td>
+                          <td>{{ u.expiry_str or "بدون تاریخ" }}</td>
+                          <td>{{ u.limit_gb if u.limit_gb is not none else "—" }}</td>
+                          <td>
+                            {% if u.status == 'active' %}
+                            <span class="badge badge-status-active">فعال</span>
+                            {% elif u.status == 'expired' %}
+                            <span class="badge badge-status-expired">منقضی</span>
+                            {% elif u.status == 'no-expiry' %}
+                            <span class="badge badge-status-no-expiry">بدون انقضا</span>
+                            {% else %}
+                            <span class="badge badge-status-invalid-date">تاریخ نامعتبر</span>
+                            {% endif %}
+                          </td>
+                          <td>
+                            {% if u.is_online %}
+                            <span class="badge badge-online">online</span>
+                            {% else %}
+                            <span class="badge badge-offline">offline</span>
+                            {% endif %}
+                          </td>
+                          <td class="text-center">
+                            <div class="d-flex justify-content-center gap-1">
+                              <input type="number" name="days_{{ u.username }}" value="30" min="1" class="form-control form-control-sm glass-input" style="width:65px" />
+                              <button type="submit" formaction="{{ url_for('route_extend', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-success">تمدید</button>
+                              <button type="submit" formaction="{{ url_for('route_deactivate', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-warning" onclick="return confirm('کاربر {{ u.username }} غیرفعال شود؟');">غیرفعال</button>
+                              <button type="submit" formaction="{{ url_for('route_delete', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-danger" onclick="return confirm('کاربر {{ u.username }} حذف شود؟');">حذف</button>
+                            </div>
+                          </td>
+                          <td class="text-center">
+                            {% if u.has_profile %}
+                            <a href="{{ url_for('download_profile', username=u.username) }}" class="btn btn-sm btn-outline-info">دانلود</a>
+                            {% else %}
+                            <span class="text-secondary small">—</span>
+                            {% endif %}
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="d-flex justify-content-end mt-3">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('کاربران انتخاب‌شده حذف شوند؟');">حذف دسته‌ای</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+          </div><!-- /#tab-v2ray -->
+
+
+          <!-- ════════════════════════════════════════════════════════
+               TAB: OPENVPN
+          ═══════════════════════════════════════════════════════════ -->
+          <div id="tab-openvpn" style="display:none">
+
+            <!-- وضعیت نصب OpenVPN -->
+            {% if ovpn_installed %}
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <span class="badge bg-success px-3 py-2">✅ OpenVPN نصب شده</span>
+              <span class="text-secondary small">گواهی‌ها به صورت خودکار ساخته می‌شوند</span>
+            </div>
+            {% else %}
+            <div class="alert-setup p-3 mb-4">
+              <strong>⚠️ OpenVPN نصب نشده است</strong><br/>
+              <small>
+                برای نصب خودکار دستور زیر را روی سرور اجرا کنید:<br/>
+                <code>sudo bash install-openvpn.sh</code><br/>
+                در حال حاضر کاربران بدون گواهی ثبت می‌شوند.
+              </small>
+            </div>
+            {% endif %}
+
+            <!-- فرم ایجاد کاربر OpenVPN -->
+            <div class="card mb-4">
+              <div class="card-body">
+                <h5 class="card-title mb-1">
+                  <span class="proto-label-ovpn">OpenVPN</span> — ایجاد / ویرایش کاربر
+                </h5>
+                <p class="text-secondary small mb-3">گواهی منحصربه‌فرد EasyRSA ساخته می‌شود. فایل <code>.ovpn</code> با گواهی Embed آماده دانلود خواهد بود.</p>
+                <form method="post" action="{{ url_for('openvpn_add') }}" class="row g-3">
+                  <div class="col-md-3">
+                    <label class="form-label">یوزرنیم <small class="text-secondary">(A-Z, 0-9, _ -)</small></label>
+                    <input
+                      type="text"
+                      name="username"
+                      class="form-control glass-input"
+                      pattern="[a-zA-Z0-9_\-]{1,64}"
+                      title="فقط حروف انگلیسی، اعداد، خط تیره و آندرلاین مجاز است"
+                      required
+                    />
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">روز اعتبار</label>
+                    <input type="number" name="days" class="form-control glass-input" value="30" min="1" />
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">محدودیت (گیگ)</label>
+                    <input type="number" name="limit_gb" class="form-control glass-input" placeholder="مثال: 5" min="0" step="0.1" />
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">IP سرور</label>
+                    <input type="text" name="server_ip" class="form-control glass-input" placeholder="مثال: 81.214.86.32" value="{{ ovpn_server_ip }}" />
+                  </div>
+                  <div class="col-md-2 d-flex align-items-end">
+                    <button type="submit" class="btn btn-gradient w-100">ذخیره</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <!-- جدول کاربران OpenVPN -->
+            <div class="card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h5 class="card-title mb-0">
+                    <span class="proto-label-ovpn">OpenVPN</span> — لیست کاربران
+                  </h5>
+                  <span class="text-secondary small">{{ ovpn_users|length }} کاربر</span>
+                </div>
+
                 <div class="table-responsive">
                   <table class="table table-dark table-striped align-middle">
                     <thead>
                       <tr>
-                        <th>
-                          <input type="checkbox" id="select-all" />
-                        </th>
+                        <th>#</th>
                         <th>یوزرنیم</th>
                         <th>تاریخ انقضا</th>
-                        <th>محدودیت (گیگ)</th>
+                        <th>حجم (گیگ)</th>
                         <th>وضعیت</th>
-                        <th>وضعیت اتصال</th>
+                        <th>گواهی</th>
                         <th class="text-center">عملیات</th>
-                        <th class="text-center">دانلود کانفیگ</th>
+                        <th class="text-center">کانفیگ .ovpn</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {% if not users %}
+                      {% if not ovpn_users %}
                       <tr>
-                        <td colspan="8" class="text-center text-secondary">
-                          هیچ کاربری ثبت نشده است.
+                        <td colspan="8" class="text-center text-secondary py-4">
+                          هیچ کاربر OpenVPN ثبت نشده است.
                         </td>
                       </tr>
                       {% endif %}
-                      {% for u in users %}
+                      {% for u in ovpn_users %}
                       <tr>
-                        <td>
-                          <input
-                            type="checkbox"
-                            name="selected_users"
-                            value="{{ u.username }}"
-                          />
-                        </td>
+                        <td class="text-secondary small">{{ loop.index }}</td>
                         <td class="fw-semibold">{{ u.username }}</td>
                         <td>{{ u.expiry_str or "بدون تاریخ" }}</td>
                         <td>{{ u.limit_gb if u.limit_gb is not none else "—" }}</td>
@@ -254,72 +410,33 @@
                           {% if u.status == 'active' %}
                           <span class="badge badge-status-active">فعال</span>
                           {% elif u.status == 'expired' %}
-                          <span class="badge badge-status-expired">منقضی شده</span>
+                          <span class="badge badge-status-expired">منقضی</span>
                           {% elif u.status == 'no-expiry' %}
-                          <span class="badge badge-status-no-expiry"
-                            >بدون انقضا</span
-                          >
+                          <span class="badge badge-status-no-expiry">بدون انقضا</span>
                           {% else %}
-                          <span class="badge badge-status-invalid-date"
-                            >تاریخ نامعتبر</span
-                          >
+                          <span class="badge badge-status-invalid-date">تاریخ نامعتبر</span>
                           {% endif %}
                         </td>
                         <td>
-                          {% if u.is_online %}
-                          <span class="badge badge-online">online</span>
+                          {% if u.has_config %}
+                          <span class="badge bg-success">✓ آماده</span>
                           {% else %}
-                          <span class="badge badge-offline">offline</span>
+                          <span class="badge bg-secondary">ندارد</span>
                           {% endif %}
                         </td>
                         <td class="text-center">
-                          <div class="d-flex justify-content-center gap-2">
-                            <input
-                              type="number"
-                              name="days_{{ u.username }}"
-                              value="30"
-                              min="1"
-                              class="form-control form-control-sm glass-input"
-                              style="width: 70px"
-                            />
-                            <button
-                              type="submit"
-                              formaction="{{ url_for('route_extend', username=u.username) }}"
-                              formmethod="post"
-                              class="btn btn-sm btn-outline-success"
-                            >
-                              تمدید
-                            </button>
-                            <button
-                              type="submit"
-                              formaction="{{ url_for('route_deactivate', username=u.username) }}"
-                              formmethod="post"
-                              class="btn btn-sm btn-outline-danger"
-                              onclick="return confirm('کاربر {{ u.username }} غیرفعال شود؟');"
-                            >
-                              غیرفعال
-                            </button>
-                            <button
-                              type="submit"
-                              formaction="{{ url_for('route_delete', username=u.username) }}"
-                              formmethod="post"
-                              class="btn btn-sm btn-outline-secondary"
-                              onclick="return confirm('کاربر {{ u.username }} حذف شود؟');"
-                            >
-                              حذف
-                            </button>
-                          </div>
+                          <form method="post" class="d-inline-flex gap-1 align-items-center">
+                            <input type="number" name="days" value="30" min="1" class="form-control form-control-sm glass-input" style="width:65px" />
+                            <button type="submit" formaction="{{ url_for('openvpn_extend', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-success">تمدید</button>
+                            <button type="submit" formaction="{{ url_for('openvpn_deactivate', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-warning" onclick="return confirm('کاربر {{ u.username }} غیرفعال و گواهی ابطال شود؟');">غیرفعال</button>
+                            <button type="submit" formaction="{{ url_for('openvpn_delete', username=u.username) }}" formmethod="post" class="btn btn-sm btn-outline-danger" onclick="return confirm('کاربر {{ u.username }} کاملاً حذف شود؟');">حذف</button>
+                          </form>
                         </td>
                         <td class="text-center">
-                          {% if u.has_profile %}
-                          <a
-                            href="{{ url_for('download_profile', username=u.username) }}"
-                            class="btn btn-sm btn-outline-info"
-                          >
-                            دانلود
-                          </a>
+                          {% if u.has_config %}
+                          <a href="{{ url_for('openvpn_download', username=u.username) }}" class="btn btn-sm btn-outline-info">دانلود .ovpn</a>
                           {% else %}
-                          <span class="text-secondary small">هنوز ساخته نشده</span>
+                          <span class="text-secondary small">—</span>
                           {% endif %}
                         </td>
                       </tr>
@@ -327,31 +444,56 @@
                     </tbody>
                   </table>
                 </div>
-                <div class="d-flex justify-content-end mt-3">
-                  <button
-                    type="submit"
-                    class="btn btn-sm btn-outline-danger"
-                    onclick="return confirm('آیا مطمئن هستید می‌خواهید کاربران انتخاب‌شده را حذف کنید؟');"
-                  >
-                    حذف دسته‌ای
-                  </button>
-                </div>
-              </form>
+              </div>
             </div>
-          </div>
+
+          </div><!-- /#tab-openvpn -->
+
         </div>
       </div>
     </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+      // ─── Protocol Tab Switcher ─────────────────────────────────────
+      const STORAGE_KEY = 'vpn_active_proto';
+
+      function switchProto(proto) {
+        const isV2ray = proto === 'v2ray';
+        document.getElementById('tab-v2ray').style.display   = isV2ray ? '' : 'none';
+        document.getElementById('tab-openvpn').style.display = isV2ray ? 'none' : '';
+
+        const btnV = document.getElementById('btn-v2ray');
+        const btnO = document.getElementById('btn-ovpn');
+        btnV.className = 'proto-btn' + (isV2ray ? ' active-v2ray' : '');
+        btnO.className = 'proto-btn' + (!isV2ray ? ' active-ovpn' : '');
+
+        try { localStorage.setItem(STORAGE_KEY, proto); } catch(e) {}
+        // URL hash برای bookmark و بازگشت با back button
+        history.replaceState(null, '', '#' + proto);
+      }
+
+      // ─── بازیابی تب فعال ──────────────────────────────────────────
+      (function () {
+        // اولویت: query param ?tab= > URL hash > localStorage > default
+        const params  = new URLSearchParams(window.location.search);
+        const qTab    = params.get('tab');
+        const hash    = window.location.hash.replace('#', '');
+        let stored;
+        try { stored = localStorage.getItem(STORAGE_KEY); } catch(e) {}
+
+        const active = (qTab === 'openvpn' || hash === 'openvpn' || stored === 'openvpn')
+          ? 'openvpn' : 'v2ray';
+        switchProto(active);
+      })();
+
+      // ─── Select-all checkbox برای V2Ray ───────────────────────────
       document.getElementById('select-all').addEventListener('change', function () {
         const checked = this.checked;
-        document.querySelectorAll('input[name="selected_users"]').forEach((el) => {
+        document.querySelectorAll('input[name="selected_users"]').forEach(el => {
           el.checked = checked;
         });
       });
     </script>
   </body>
 </html>
-
->
