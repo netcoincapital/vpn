@@ -1405,6 +1405,7 @@ app = create_app()
 
 if __name__ == "__main__":
     port = int(os.environ.get("VPN_ADMIN_PORT", "5000"))
-    app.run(host="127.0.0.1", port=port, debug=False)
+    host = os.environ.get("VPN_ADMIN_HOST", "0.0.0.0")
+    app.run(host=host, port=port, debug=False)
 
 
