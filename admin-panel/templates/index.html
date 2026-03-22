@@ -387,6 +387,7 @@
                         <th>تاریخ انقضا</th>
                         <th>حجم (گیگ)</th>
                         <th>وضعیت</th>
+                        <th>اتصال</th>
                         <th>گواهی</th>
                         <th class="text-center">عملیات</th>
                         <th class="text-center">کانفیگ .ovpn</th>
@@ -395,7 +396,7 @@
                     <tbody>
                       {% if not ovpn_users %}
                       <tr>
-                        <td colspan="8" class="text-center text-secondary py-4">
+                        <td colspan="9" class="text-center text-secondary py-4">
                           هیچ کاربر OpenVPN ثبت نشده است.
                         </td>
                       </tr>
@@ -415,6 +416,13 @@
                           <span class="badge badge-status-no-expiry">بدون انقضا</span>
                           {% else %}
                           <span class="badge badge-status-invalid-date">تاریخ نامعتبر</span>
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if u.is_online %}
+                          <span class="badge bg-success">🟢 آنلاین</span>
+                          {% else %}
+                          <span class="badge bg-secondary">⚫ آفلاین</span>
                           {% endif %}
                         </td>
                         <td>

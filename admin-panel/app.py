@@ -1113,6 +1113,34 @@ def get_openvpn_summary() -> dict:
     return {"total": total, "active": active, "inactive": inactive}
 
 
+def get_openvpn_online_usernames() -> set:
+    """خواندن فایل status سرور OpenVPN و برگرداندن نام کاربران متصل."""
+    online = set()
+    # مسیرهای احتمالی فایل status
+    status_paths = [
+        "/run/openvpn-server/status-server.log",
+        "/var/log/openvpn/openvpn-status.log",
+        os.path.join(OPENVPN_SERVER_DIR, "openvpn-status.log"),
+    ]
+    for path in status_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    # فرمت version 2: CLIENT_LIST,commonname,real_addr,...
+                    if line.startswith("CLIENT_LIST,"):
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2:
+                            cn = parts[1].strip().lower()
+                            if cn:
+                                online.add(cn)
+        except OSError:
+            pass
+        break  # اولین فایلی که پیدا شد کافی است
+    return online
+
+
 def restart_openvpn_service():
     """ری‌استارت سرویس OpenVPN برای اعمال CRL به‌روز شده."""
     try:
@@ -1166,6 +1194,9 @@ def create_app():
         for u in users:
             u["is_online"] = u["username"].lower() in online_users
         ovpn_users = read_openvpn_users()
+        ovpn_online = get_openvpn_online_usernames()
+        for u in ovpn_users:
+            u["is_online"] = u["username"].lower() in ovpn_online
         return render_template(
             "index.html",
             users=users,
