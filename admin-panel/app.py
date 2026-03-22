@@ -859,6 +859,10 @@ def _run_easyrsa(args: list, timeout: int = 120):
         env = os.environ.copy()
         env["EASYRSA_BATCH"] = "1"
         env["EASYRSA_PKI"] = OPENVPN_PKI_DIR
+        # اگر vars در PKI وجود دارد، صریحاً به آن اشاره می‌کنیم تا تداخل با vars در base dir برطرف شود
+        pki_vars = os.path.join(OPENVPN_PKI_DIR, "vars")
+        if os.path.exists(pki_vars):
+            env["EASYRSA_VARS_FILE"] = pki_vars
         result = subprocess.run(
             [easyrsa_bin] + args,
             cwd=OPENVPN_EASYRSA_DIR,
