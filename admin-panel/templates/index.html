@@ -230,6 +230,13 @@
                   </h5>
                   <span class="text-secondary small">{{ users|length }} کاربر</span>
                 </div>
+                {% if stealth_enabled %}
+                <div class="alert alert-warning alert-dismissible fade show py-2 mb-3" role="alert">
+                  <strong>🔒 حالت Stealth فعال است</strong> — دامنه: <code>{{ stealth_domain }}</code><br>
+                  <small>پروفایل‌های WS+TLS برای دور زدن فیلتر هوشمند (DPI) آماده دانلود هستند.</small>
+                  <button type="button" class="btn-close btn-close-white btn-sm" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+                {% endif %}
 
                 <form method="post" action="{{ url_for('route_bulk_delete') }}">
                   <div class="table-responsive">
@@ -287,11 +294,16 @@
                             </div>
                           </td>
                           <td class="text-center">
+                            <div class="d-flex flex-column gap-1 align-items-center">
                             {% if u.has_profile %}
                             <a href="{{ url_for('download_profile', username=u.username) }}" class="btn btn-sm btn-outline-info">دانلود</a>
                             {% else %}
                             <span class="text-secondary small">—</span>
                             {% endif %}
+                            {% if stealth_enabled %}
+                            <a href="{{ url_for('download_stealth_profile', username=u.username) }}" class="btn btn-sm btn-outline-warning" title="WebSocket+TLS — ضد فیلترینگ هوشمند">🔒 Stealth</a>
+                            {% endif %}
+                            </div>
                           </td>
                         </tr>
                         {% endfor %}

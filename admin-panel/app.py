@@ -51,6 +51,37 @@ CLIENT_PATH = os.environ.get("VPN_CLIENT_PATH", "")
 CLIENT_HEADER_TYPE = os.environ.get("VPN_CLIENT_HEADER_TYPE", "")
 PREFERRED_PROFILE_PROTOCOL = os.environ.get("VPN_PROFILE_PROTOCOL", "vless").lower()
 
+# ─── تنظیمات Stealth (V2Ray + WebSocket + TLS) ──────────────────────────────
+# این مقادیر بعد از اجرای install-stealth.sh از فایل ws-paths.conf خوانده می‌شوند
+_WS_PATHS_FILE = os.path.join(PROJECT_DIR, "server", "ws-paths.conf")
+
+def _load_ws_config() -> dict:
+    """خواندن تنظیمات WS+TLS از فایل یا متغیرهای محیطی."""
+    cfg = {
+        "domain": os.environ.get("STEALTH_DOMAIN", ""),
+        "vless_path": os.environ.get("STEALTH_VLESS_PATH", ""),
+        "vmess_path": os.environ.get("STEALTH_VMESS_PATH", ""),
+    }
+    if os.path.exists(_WS_PATHS_FILE):
+        try:
+            with open(_WS_PATHS_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line and not line.startswith("#"):
+                        k, _, v = line.partition("=")
+                        k, v = k.strip(), v.strip()
+                        if k == "STEALTH_DOMAIN" and not cfg["domain"]:
+                            cfg["domain"] = v
+                        elif k == "STEALTH_VLESS_PATH" and not cfg["vless_path"]:
+                            cfg["vless_path"] = v
+                        elif k == "STEALTH_VMESS_PATH" and not cfg["vmess_path"]:
+                            cfg["vmess_path"] = v
+        except OSError:
+            pass
+    return cfg
+
+STEALTH_CONFIG = _load_ws_config()
+
 # ─── تنظیمات OpenVPN ────────────────────────────────────────────────────────
 OPENVPN_USERS_FILE = os.path.join(PROJECT_DIR, "server", "openvpn-users.txt")
 OPENVPN_CLIENTS_DIR = os.path.join(PROJECT_DIR, "client", "openvpn")
@@ -692,6 +723,78 @@ def write_client_profile(username: str, server_ip: str, user_uuid: str) -> None:
     print(f"Generated profiles for {username}: {links[0]}")
 
 
+def build_stealth_links(username: str, user_uuid: str) -> list:
+    """ساخت لینک‌های VLESS/VMess با WebSocket + TLS (Stealth Mode).
+    
+    این لینک‌ها ترافیک را داخل HTTPS پنهان می‌کنند و برای
+    فیلترینگ DPI شبیه بازدید از یک وب‌سایت عادی به نظر می‌رسند.
+    """
+    ws = STEALTH_CONFIG
+    domain = ws.get("domain", "")
+    vless_path = ws.get("vless_path", "")
+    vmess_path = ws.get("vmess_path", "")
+
+    if not domain:
+        return []
+
+    links = []
+    profile_name = f"{PROFILE_NAME_PREFIX}{username}🔒{PROFILE_NAME_SUFFIX}".strip()
+
+    # ── VLESS + WS + TLS ──────────────────────────────────────────
+    if vless_path:
+        vless_params = "&".join([
+            "encryption=none",
+            "security=tls",
+            "type=ws",
+            f"host={quote(domain, safe='')}",
+            f"path={quote(vless_path, safe='')}",
+            "fp=chrome",          # fingerprint مرورگر Chrome
+            "alpn=h2%2Chttp%2F1.1",
+        ])
+        vless_stealth = (
+            f"vless://{user_uuid}@{domain}:443"
+            f"?{vless_params}"
+            f"#{quote(profile_name + ' [Stealth]', safe='')}"
+        )
+        links.append(vless_stealth)
+
+    # ── VMess + WS + TLS ──────────────────────────────────────────
+    if vmess_path:
+        vmess_obj = {
+            "v": "2",
+            "ps": profile_name + " [Stealth]",
+            "add": domain,
+            "port": "443",
+            "id": user_uuid,
+            "aid": "0",
+            "net": "ws",
+            "type": "none",
+            "host": domain,
+            "path": vmess_path,
+            "tls": "tls",
+        }
+        import json as _json
+        vmess_stealth = "vmess://" + base64.b64encode(
+            _json.dumps(vmess_obj, separators=(",", ":")).encode()
+        ).decode()
+        links.append(vmess_stealth)
+
+    return links
+
+
+def write_stealth_profile(username: str, user_uuid: str) -> bool:
+    """ذخیره پروفایل Stealth در client/<username>/stealth.txt."""
+    links = build_stealth_links(username, user_uuid)
+    if not links:
+        return False
+    profile_dir = os.path.join(CLIENTS_DIR, username)
+    os.makedirs(profile_dir, exist_ok=True)
+    stealth_path = os.path.join(profile_dir, "stealth.txt")
+    with open(stealth_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(links))
+    return True
+
+
 def sync_all_client_profiles(default_server_ip="81.214.86.32"):
     """Regenerate all downloadable client profiles from current config/users state."""
     for user in read_users():
@@ -700,6 +803,7 @@ def sync_all_client_profiles(default_server_ip="81.214.86.32"):
             default_server_ip,
             user["uuid"],
         )
+        write_stealth_profile(user["username"], user["uuid"])
 
 
 def reconcile_runtime_state(default_server_ip="81.214.86.32"):
@@ -1193,16 +1297,22 @@ def create_app():
         online_users = get_online_usernames()
         for u in users:
             u["is_online"] = u["username"].lower() in online_users
+            # بررسی وجود پروفایل stealth
+            stealth_path = os.path.join(CLIENTS_DIR, u["username"], "stealth.txt")
+            u["has_stealth"] = os.path.exists(stealth_path)
         ovpn_users = read_openvpn_users()
         ovpn_online = get_openvpn_online_usernames()
         for u in ovpn_users:
             u["is_online"] = u["username"].lower() in ovpn_online
+        ws = STEALTH_CONFIG
         return render_template(
             "index.html",
             users=users,
             ovpn_users=ovpn_users,
             ovpn_installed=openvpn_is_installed(),
             ovpn_server_ip=OPENVPN_SERVER_IP or "",
+            stealth_enabled=bool(ws.get("domain")),
+            stealth_domain=ws.get("domain", ""),
         )
 
     @app.get("/stats")
@@ -1306,6 +1416,7 @@ def create_app():
         if user:
             sync_v2ray_clients_with_users()
             write_client_profile(username, "81.214.86.32", user["uuid"])
+            write_stealth_profile(username, user["uuid"])
 
         profile_path = os.path.join(CLIENTS_DIR, username, "client.txt")
         if not os.path.exists(profile_path):
@@ -1318,6 +1429,29 @@ def create_app():
             profile_path,
             as_attachment=True,
             download_name=f"{username}.txt",
+        )
+
+    @app.get("/download-stealth/<username>")
+    def download_stealth_profile(username):
+        """دانلود پروفایل Stealth (WS+TLS) برای کاربر."""
+        from flask import send_file as _sf
+
+        user = get_user_by_username(username)
+        if not user:
+            flash("کاربر پیدا نشد.", "danger")
+            return redirect(url_for("index"))
+
+        write_stealth_profile(username, user["uuid"])
+        stealth_path = os.path.join(CLIENTS_DIR, username, "stealth.txt")
+
+        if not os.path.exists(stealth_path):
+            flash("پروفایل Stealth برای این کاربر موجود نیست. ابتدا install-stealth.sh را اجرا کنید.", "warning")
+            return redirect(url_for("index"))
+
+        return _sf(
+            stealth_path,
+            as_attachment=True,
+            download_name=f"{username}-stealth.txt",
         )
 
     # ──────────────────────────────────────────────────────────────────────────
