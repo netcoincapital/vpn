@@ -82,6 +82,39 @@ def _load_ws_config() -> dict:
 
 STEALTH_CONFIG = _load_ws_config()
 
+# ─── تنظیمات OpenVPN Stealth (Stunnel) ──────────────────────────────────────
+_OVPN_STEALTH_FILE = os.path.join(PROJECT_DIR, "server", "ovpn-stealth.conf")
+
+def _load_stunnel_config() -> dict:
+    """خواندن تنظیمات Stunnel از فایل یا متغیرهای محیطی."""
+    cfg = {
+        "enabled": os.environ.get("STUNNEL_ENABLED", "0") == "1",
+        "port": os.environ.get("STUNNEL_PORT", "8443"),
+        "tls_crypt_key": os.environ.get("TLS_CRYPT_KEY", "/etc/openvpn/server/tls-crypt.key"),
+        "server_ip": os.environ.get("OPENVPN_SERVER_IP", ""),
+    }
+    if os.path.exists(_OVPN_STEALTH_FILE):
+        try:
+            with open(_OVPN_STEALTH_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line and not line.startswith("#"):
+                        k, _, v = line.partition("=")
+                        k, v = k.strip(), v.strip()
+                        if k == "STUNNEL_ENABLED" and not cfg["enabled"]:
+                            cfg["enabled"] = v == "1"
+                        elif k == "STUNNEL_PORT":
+                            cfg["port"] = v
+                        elif k == "TLS_CRYPT_KEY":
+                            cfg["tls_crypt_key"] = v
+                        elif k == "SERVER_IP" and not cfg["server_ip"]:
+                            cfg["server_ip"] = v
+        except OSError:
+            pass
+    return cfg
+
+STUNNEL_CONFIG = _load_stunnel_config()
+
 # ─── تنظیمات OpenVPN ────────────────────────────────────────────────────────
 OPENVPN_USERS_FILE = os.path.join(PROJECT_DIR, "server", "openvpn-users.txt")
 OPENVPN_CLIENTS_DIR = os.path.join(PROJECT_DIR, "client", "openvpn")
@@ -1083,6 +1116,94 @@ def build_ovpn_config(username: str, server_ip: str):
     return ovpn
 
 
+def build_ovpn_stunnel_config(username: str) -> str | None:
+    """ساخت پروفایل OpenVPN+Stunnel — ترافیک از طریق TLS روی پورت 8443 هدایت می‌شود."""
+    if not _validate_ovpn_username(username):
+        return None
+
+    sc = STUNNEL_CONFIG
+    if not sc.get("enabled"):
+        return None
+
+    ca_path = os.path.join(OPENVPN_PKI_DIR, "ca.crt")
+    cert_path = os.path.join(OPENVPN_PKI_DIR, "issued", f"{username}.crt")
+    key_path = os.path.join(OPENVPN_PKI_DIR, "private", f"{username}.key")
+    tls_crypt_path = sc.get("tls_crypt_key", "/etc/openvpn/server/tls-crypt.key")
+
+    for path in (ca_path, cert_path, key_path):
+        if not os.path.exists(path):
+            return None
+
+    ca_content = _read_file_content(ca_path)
+    cert_content = _read_file_content(cert_path)
+    cert_match = re.search(
+        r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+        cert_content, re.DOTALL,
+    )
+    cert_clean = cert_match.group(1) if cert_match else cert_content
+    key_content = _read_file_content(key_path)
+
+    server_ip = sc.get("server_ip") or OPENVPN_SERVER_IP or "YOUR_SERVER_IP"
+    stunnel_port = sc.get("port", "8443")
+
+    # اگر کلید tls-crypt موجود است، آن را embed کنیم
+    tls_crypt_block = ""
+    if os.path.exists(tls_crypt_path):
+        tls_crypt_content = _read_file_content(tls_crypt_path)
+        tls_crypt_block = f"\n<tls-crypt>\n{tls_crypt_content}\n</tls-crypt>\n"
+
+    ovpn = (
+        f"# OpenVPN + Stunnel (Stealth) — کاربر: {username}\n"
+        f"# ترافیک داخل TLS روی پورت {stunnel_port} — ضد فیلترینگ هوشمند\n"
+        f"# نیاز به نصب Stunnel روی کلاینت: stunnel.net\n"
+        f"#\n"
+        f"# ── راهنمای اتصال ──────────────────────────────────────────\n"
+        f"# ۱. فایل stunnel-client.conf را از پنل دانلود و Stunnel را نصب کنید\n"
+        f"# ۲. Stunnel را اجرا کنید (پورت 1195 محلی → سرور:8443)\n"
+        f"# ۳. این فایل .ovpn را در OpenVPN Connect باز کنید\n"
+        f"# ──────────────────────────────────────────────────────────\n"
+        f"client\n"
+        f"dev tun\n"
+        f"proto tcp\n"
+        f"remote 127.0.0.1 1195\n"
+        f"resolv-retry infinite\n"
+        f"nobind\n"
+        f"persist-key\n"
+        f"persist-tun\n"
+        f"cipher AES-256-GCM\n"
+        f"auth SHA256\n"
+        f"tls-client\n"
+        f"tls-version-min 1.2\n"
+        f"key-direction 1\n"
+        f"# ضد fingerprinting\n"
+        f"tls-cipher TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384\n"
+        f"reneg-sec 0\n"
+        f"verb 3\n\n"
+        f"<ca>\n{ca_content}\n</ca>\n\n"
+        f"<cert>\n{cert_clean}\n</cert>\n\n"
+        f"<key>\n{key_content}\n</key>\n"
+        f"{tls_crypt_block}"
+    )
+
+    # فایل config Stunnel کلاینت را هم می‌سازیم
+    stunnel_client = (
+        f"; Stunnel Client Config — OpenVPN Stealth\n"
+        f"; این فایل را در مسیر Stunnel قرار دهید\n"
+        f"; Windows: C:\\Program Files (x86)\\stunnel\\config\\stunnel.conf\n"
+        f"; Linux/Mac: /etc/stunnel/stunnel.conf\n\n"
+        f"[openvpn-stealth]\n"
+        f"client = yes\n"
+        f"accept  = 127.0.0.1:1195\n"
+        f"connect = {server_ip}:{stunnel_port}\n"
+        f"verify = 0\n"
+        f"; برای امنیت بیشتر، گواهی سرور را verify کنید:\n"
+        f"; CAfile = /path/to/stunnel-server.crt\n"
+        f"; verify = 2\n"
+    )
+
+    return ovpn, stunnel_client
+
+
 def write_openvpn_client_config(username: str, server_ip: str) -> bool:
     """نوشتن فایل .ovpn کلاینت در پوشه client/openvpn/."""
     if not _validate_ovpn_username(username):
@@ -1313,6 +1434,8 @@ def create_app():
             ovpn_server_ip=OPENVPN_SERVER_IP or "",
             stealth_enabled=bool(ws.get("domain")),
             stealth_domain=ws.get("domain", ""),
+            stunnel_enabled=bool(STUNNEL_CONFIG.get("enabled")),
+            stunnel_port=STUNNEL_CONFIG.get("port", "8443"),
         )
 
     @app.get("/stats")
@@ -1565,6 +1688,57 @@ def create_app():
             as_attachment=True,
             download_name=f"{username}.ovpn",
             mimetype="application/x-openvpn-profile",
+        )
+
+    @app.get("/openvpn/download-stunnel/<username>")
+    def openvpn_download_stunnel(username):
+        """دانلود پروفایل OpenVPN+Stunnel (ضد فیلترینگ هوشمند)."""
+        from flask import send_file as _sf
+        import io, zipfile
+
+        if not _validate_ovpn_username(username):
+            flash("نام کاربری نامعتبر است.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        if not STUNNEL_CONFIG.get("enabled"):
+            flash("حالت Stunnel فعال نیست. ابتدا install-openvpn-stealth.sh را اجرا کنید.", "warning")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        result = build_ovpn_stunnel_config(username)
+        if result is None:
+            flash("گواهی این کاربر یافت نشد.", "danger")
+            return redirect(url_for("index") + "?tab=openvpn")
+
+        ovpn_content, stunnel_conf = result
+
+        # هر دو فایل را در یک ZIP برمی‌گردانیم
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{username}-stealth.ovpn", ovpn_content)
+            zf.writestr("stunnel-client.conf", stunnel_conf)
+            zf.writestr("README.txt",
+                "راهنمای اتصال OpenVPN Stealth\n"
+                "═══════════════════════════════\n\n"
+                "Windows:\n"
+                "  ۱. Stunnel دانلود کنید: https://www.stunnel.org/downloads.html\n"
+                "  ۲. فایل stunnel-client.conf را در C:\\Program Files (x86)\\stunnel\\config\\ کپی کنید\n"
+                "  ۳. Stunnel را اجرا کنید (system tray)\n"
+                "  ۴. فایل .ovpn را در OpenVPN Connect وارد کنید\n\n"
+                "Android:\n"
+                "  ۱. SSHTunnel یا Stunnel4Android نصب کنید\n"
+                "  ۲. تنظیمات: server=YOUR_SERVER_IP port=8443\n"
+                "  ۳. OpenVPN Connect: remote 127.0.0.1 1195\n\n"
+                "Linux/Mac:\n"
+                "  sudo apt install stunnel4   # یا brew install stunnel\n"
+                "  sudo stunnel stunnel-client.conf\n"
+                "  sudo openvpn --config .ovpn\n"
+            )
+        buf.seek(0)
+        return _sf(
+            buf,
+            as_attachment=True,
+            download_name=f"{username}-openvpn-stealth.zip",
+            mimetype="application/zip",
         )
 
     return app

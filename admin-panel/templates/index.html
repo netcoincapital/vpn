@@ -389,6 +389,13 @@
                   </h5>
                   <span class="text-secondary small">{{ ovpn_users|length }} کاربر</span>
                 </div>
+                {% if stunnel_enabled %}
+                <div class="alert alert-info alert-dismissible fade show py-2 mb-3" role="alert">
+                  <strong>🛡️ حالت Stealth OpenVPN فعال است</strong> — پورت Stunnel: <code>{{ stunnel_port }}</code><br>
+                  <small>پروفایل‌های Stunnel+TLS-Crypt برای دور زدن DPI آماده دانلود هستند (فایل ZIP شامل .ovpn و راهنما).</small>
+                  <button type="button" class="btn-close btn-close-white btn-sm" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+                {% endif %}
 
                 <div class="table-responsive">
                   <table class="table table-dark table-striped align-middle">
@@ -403,12 +410,13 @@
                         <th>گواهی</th>
                         <th class="text-center">عملیات</th>
                         <th class="text-center">کانفیگ .ovpn</th>
+                        {% if stunnel_enabled %}<th class="text-center">Stealth 🛡️</th>{% endif %}
                       </tr>
                     </thead>
                     <tbody>
                       {% if not ovpn_users %}
                       <tr>
-                        <td colspan="9" class="text-center text-secondary py-4">
+                        <td colspan="{{ 10 if stunnel_enabled else 9 }}" class="text-center text-secondary py-4">
                           هیچ کاربر OpenVPN ثبت نشده است.
                         </td>
                       </tr>
@@ -459,6 +467,15 @@
                           <span class="text-secondary small">—</span>
                           {% endif %}
                         </td>
+                        {% if stunnel_enabled %}
+                        <td class="text-center">
+                          {% if u.has_config %}
+                          <a href="{{ url_for('openvpn_download_stunnel', username=u.username) }}" class="btn btn-sm btn-outline-warning" title="OpenVPN+Stunnel+TLS-Crypt — ضد فیلترینگ هوشمند">🛡️ Stealth</a>
+                          {% else %}
+                          <span class="text-secondary small">—</span>
+                          {% endif %}
+                        </td>
+                        {% endif %}
                       </tr>
                       {% endfor %}
                     </tbody>
